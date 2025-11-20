@@ -2,23 +2,25 @@ name: Deploy to VPS
 
 on:
   push:
-    branches: ["main"]
+    branches: [ "main" ]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Connect & Deploy to VPS
+      - name: Deploy to VPS
         uses: appleboy/ssh-action@v0.1.6
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_KEY }}
-          port: ${{ secrets.SSH_PORT }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: 22
           script: |
-            echo "🚀 Running deployment script on VPS..."
-            bash ~/deploy.sh
+            cd /home/kashif/better-dev-api
+            git pull
+            sudo docker compose down --remove-orphans
+            sudo docker compose up -d --build
