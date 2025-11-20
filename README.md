@@ -1,6 +1,6 @@
 # Better DEV AI Backend
 
-> Core server and API for Better DEV, an intelligent AI chat platform with tool-calling capabilities and streaming responses.
+> Core server and API for Better DEV, an intelligent AI chat platform with tool-calling capabilities and streaming responses. 
 
 [![NestJS](https://img.shields.io/badge/NestJS-E0234E?style=flat&logo=nestjs&logoColor=white)](https://nestjs.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
