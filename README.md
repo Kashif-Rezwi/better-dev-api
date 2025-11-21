@@ -713,7 +713,337 @@ Searches the web for current information using Tavily API.
 
 ## 🚢 Deployment
 
-### Docker Compose (Recommended)
+This API is deployed on **DigitalOcean** using a production-grade architecture with Docker, PostgreSQL, Nginx reverse proxy, SSL certificates, and automated CI/CD.
+
+**Live API**: `https://api.betterdev.in`
+
+---
+
+### Production Architecture
+
+```
+GitHub (push to main)
+       ↓ CI/CD
+GitHub Actions ───> SSH into VPS ───> Restart Docker Container
+                                     (auto-build + health check)
+DigitalOcean VPS (Ubuntu 22.04)
+       ↓
+NGINX (SSL, reverse proxy)
+       ↓
+Docker Container (NestJS API)
+       ↓
+PostgreSQL (VPS service)
+```
+
+---
+
+### 🌐 DigitalOcean VPS Deployment
+
+#### **Step 1: Prepare the VPS**
+
+1. **Create a DigitalOcean Droplet** with Ubuntu 22.04 LTS
+2. **SSH into the server**:
+   ```bash
+   ssh root@your-server-ip
+   ```
+
+3. **Create a non-root user** (best practice):
+   ```bash
+   adduser kashif
+   usermod -aG sudo kashif
+   su - kashif
+   ```
+
+---
+
+#### **Step 2: Install Docker & Docker Compose**
+
+```bash
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+
+# Add user to docker group (no sudo needed)
+sudo usermod -aG docker $USER
+newgrp docker
+
+# Install Docker Compose
+sudo apt-get update
+sudo apt-get install docker-compose-plugin
+
+# Verify installation
+docker --version
+docker compose version
+```
+
+---
+
+#### **Step 3: Install PostgreSQL on VPS**
+
+Instead of running PostgreSQL in Docker, we use a standalone database for stability and performance:
+
+```bash
+# Install PostgreSQL 14
+sudo apt update
+sudo apt install postgresql postgresql-contrib
+
+# Create database and user
+sudo -u postgres psql
+
+CREATE DATABASE better_dev_db;
+CREATE USER better_dev WITH PASSWORD 'your_secure_password';
+GRANT ALL PRIVILEGES ON DATABASE better_dev_db TO better_dev;
+\q
+
+# Configure PostgreSQL to accept connections
+sudo nano /etc/postgresql/14/main/postgresql.conf
+# Set: listen_addresses = '*'
+
+sudo nano /etc/postgresql/14/main/pg_hba.conf
+# Add: host all all 0.0.0.0/0 md5
+
+sudo systemctl restart postgresql
+
+# Open firewall (if using UFW)
+sudo ufw allow 5432/tcp
+```
+
+---
+
+#### **Step 4: Clone Repository**
+
+```bash
+cd ~
+git clone https://github.com/Kashif-Rezwi/better-dev-api.git
+cd better-dev-api
+```
+
+---
+
+#### **Step 5: Configure Environment**
+
+Create `.env` file:
+
+```bash
+nano .env
+```
+
+Add environment variables:
+
+```env
+# Database
+DATABASE_HOST=localhost
+DATABASE_PORT=5432
+DATABASE_USER=better_dev
+DATABASE_PASSWORD=your_secure_password
+DATABASE_NAME=better_dev_db
+
+# JWT
+JWT_SECRET=your-super-secret-jwt-key-change-this
+JWT_EXPIRATION=7d
+
+# App
+PORT=3001
+NODE_ENV=production
+
+# AI
+GROQ_API_KEY=gsk_your_groq_api_key
+DEFAULT_AI_MODEL=openai/gpt-oss-120b
+AI_TEXT_MODEL=llama-3.1-8b-instant
+AI_TOOL_MODEL=llama-3.3-70b-versatile
+
+# Tools
+TAVILY_API_KEY=tvly-your-tavily-api-key
+```
+
+---
+
+#### **Step 6: Build & Start Docker Container**
+
+```bash
+# Build Docker image
+docker compose build --no-cache
+
+# Start container in detached mode
+docker compose up -d
+
+# Verify API is running
+curl http://localhost:3001/health
+
+# View logs
+docker compose logs -f
+```
+
+---
+
+#### **Step 7: Install & Configure Nginx Reverse Proxy**
+
+```bash
+# Install Nginx
+sudo apt update
+sudo apt install nginx
+
+# Create Nginx configuration
+sudo nano /etc/nginx/sites-available/api.betterdev.in
+```
+
+Add the following configuration:
+
+```nginx
+server {
+    listen 80;
+    server_name api.betterdev.in;
+
+    location / {
+        proxy_pass http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable the site:
+
+```bash
+# Create symbolic link
+sudo ln -sf /etc/nginx/sites-available/api.betterdev.in /etc/nginx/sites-enabled/
+
+# Test configuration
+sudo nginx -t
+
+# Reload Nginx
+sudo systemctl reload nginx
+```
+
+---
+
+#### **Step 8: Enable HTTPS with Certbot (Free SSL)**
+
+```bash
+# Install Certbot
+sudo apt install certbot python3-certbot-nginx
+
+# Obtain SSL certificate (auto-configures Nginx)
+sudo certbot --nginx -d api.betterdev.in
+
+# Verify auto-renewal
+sudo certbot renew --dry-run
+```
+
+Now your API is accessible at: **`https://api.betterdev.in`**
+
+---
+
+#### **Step 9: Set Up GitHub Actions CI/CD (Auto Deploy)**
+
+This enables automatic deployment on every push to `main` branch.
+
+**On the VPS:**
+
+1. **Generate SSH key for deployments** (no passphrase):
+   ```bash
+   ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/.ssh/github_actions_deploy
+   
+   # Add public key to authorized_keys
+   cat ~/.ssh/github_actions_deploy.pub >> ~/.ssh/authorized_keys
+   
+   # Copy private key (you'll add this to GitHub Secrets)
+   cat ~/.ssh/github_actions_deploy
+   ```
+
+**On GitHub:**
+
+2. **Add SSH private key to GitHub Secrets**:
+   - Go to your repo → Settings → Secrets and variables → Actions
+   - Add secret: `SSH_PRIVATE_KEY` (paste the private key content)
+   - Add secret: `SERVER_IP` (your VPS IP address)
+   - Add secret: `SERVER_USER` (your username, e.g., `kashif`)
+
+3. **Create GitHub Actions workflow**:
+
+Create `.github/workflows/deploy.yml`:
+
+```yaml
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            cd ~/better-dev-api
+            git pull origin main
+            docker compose down
+            docker compose up -d --build
+            docker compose logs --tail=50
+```
+
+Now, every push to `main` automatically deploys to production! 🚀
+
+---
+
+### 🎯 Production Features
+
+✅ **Auto Deploy** - Push to GitHub → automatic deployment  
+✅ **Auto Restart** - Docker restarts API if it crashes  
+✅ **Health Checks** - Docker monitors API health  
+✅ **SSL Auto-Renew** - Free HTTPS with auto-renewal  
+✅ **Isolated Database** - PostgreSQL runs independently  
+✅ **Reverse Proxy** - Nginx handles all traffic  
+✅ **Production-Grade** - Enterprise-level architecture  
+
+---
+
+### 🔄 Managing Deployment
+
+```bash
+# SSH into VPS
+ssh kashif@your-server-ip
+
+# View logs
+cd ~/better-dev-api
+docker compose logs -f
+
+# Restart API
+docker compose restart
+
+# Rebuild and restart
+docker compose down
+docker compose up -d --build
+
+# Check health
+curl https://api.betterdev.in/health
+
+# View Nginx logs
+sudo tail -f /var/log/nginx/access.log
+sudo tail -f /var/log/nginx/error.log
+
+# Check SSL certificate
+sudo certbot certificates
+```
+
+---
+
+### 🐳 Local Docker Development
+
+For local development with Docker:
 
 ```bash
 # Build and start all services
@@ -727,31 +1057,6 @@ npm run docker:down
 
 # Restart app only
 npm run docker:restart
-```
-
-### Render.com
-
-1. **Connect Repository** to Render
-2. **Configure Blueprint** using `render.yaml`
-3. **Set Environment Variables**:
-   - `GROQ_API_KEY`
-   - `TAVILY_API_KEY`
-   - `JWT_SECRET` (auto-generated)
-4. **Deploy** - Render handles the rest
-
-### Manual Deployment
-
-```bash
-# Build production image
-docker build -t better-dev-api .
-
-# Run production container
-docker run -p 3001:3001 \
-  -e DATABASE_URL=postgresql://... \
-  -e JWT_SECRET=... \
-  -e GROQ_API_KEY=... \
-  -e TAVILY_API_KEY=... \
-  better-dev-api
 ```
 
 ---
