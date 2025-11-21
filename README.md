@@ -731,7 +731,7 @@ npm run docker:restart
 
 ### Render.com
 
-1. **Connect Repository** to Render 
+1. **Connect Repository** to Render
 2. **Configure Blueprint** using `render.yaml`
 3. **Set Environment Variables**:
    - `GROQ_API_KEY`
