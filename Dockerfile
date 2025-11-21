@@ -1,13 +1,13 @@
-# Build stage
-FROM node:20-alpine AS builder
+# Use Node.js LTS
+FROM node:20
 
 WORKDIR /app
 
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies
-RUN npm ci
+# Install production dependencies
+RUN npm install --production
 
 # Copy source code
 COPY . .
@@ -15,22 +15,8 @@ COPY . .
 # Build application
 RUN npm run build
 
-# Production stage
-FROM node:20-alpine
-
-WORKDIR /app
-
-# Copy package files
-COPY package*.json ./
-
-# Install production dependencies only
-RUN npm ci --only=production
-
-# Copy built application from builder
-COPY --from=builder /app/dist ./dist
-
 # Expose port
 EXPOSE 3001
 
 # Start application
-CMD ["node", "dist/main"]
+CMD ["npm", "run", "start:prod"]
