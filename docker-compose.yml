@@ -1,8 +1,9 @@
-version: "3.8"
-
 services:
   better_dev_app:
     container_name: better_dev_app
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: better-dev-api-app:latest
     restart: always
 
