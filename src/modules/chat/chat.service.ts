@@ -3,6 +3,7 @@ import {
   NotFoundException,
   ForbiddenException,
   InternalServerErrorException,
+  Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -19,6 +20,8 @@ import { ToolRegistry } from './tools/tool.registry';
 
 @Injectable()
 export class ChatService {
+  private readonly logger = new Logger(ChatService.name);
+
   constructor(
     @InjectRepository(Conversation)
     private conversationRepository: Repository<Conversation>,
@@ -40,14 +43,14 @@ export class ChatService {
         },
       },
     });
-  
+
     const uiMessages: UIMessage[] = [];
-  
+
     // Return empty if conversation not found
     if (!conversation) {
       return uiMessages;
     }
-  
+
     // Prepend system prompt if exists
     if (conversation.systemPrompt) {
       uiMessages.push({
@@ -56,16 +59,57 @@ export class ChatService {
         parts: [{ type: 'text', text: conversation.systemPrompt }],
       });
     }
-  
-    // Add messages
+
+    // Add messages with tool results included in text
     conversation.messages.forEach((msg) => {
+      let contentText = msg.content;
+
+      // Append tool results to the text content if they exist
+      if (msg.metadata && msg.metadata.toolCalls && Array.isArray(msg.metadata.toolCalls)) {
+        // Debug logging
+        this.logger.debug('[DEBUG] Found metadata.toolCalls: ' + JSON.stringify(msg.metadata.toolCalls, null, 2));
+
+        const toolResults = msg.metadata.toolCalls
+          .filter((toolCall: any) => toolCall.output)
+          .map((toolCall: any) => {
+            this.logger.debug(`[DEBUG] Processing toolCall: ${toolCall.toolName} has output: ${!!toolCall.output}`);
+            if (toolCall.toolName === 'tavily_web_search' && toolCall.output) {
+              const output = toolCall.output;
+              this.logger.debug('[DEBUG] Output structure: ' + Object.keys(output).join(', '));
+              // Include the summary and results in the text content
+              let toolText = '\n\n[Web Search Results]:\n';
+              if (output.summary) {
+                toolText += `Summary: ${output.summary}\n\n`;
+              }
+              if (output.results && Array.isArray(output.results)) {
+                toolText += `Sources:\n`;
+                output.results.forEach((result: any, index: number) => {
+                  toolText += `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.content}\n\n`;
+                });
+              }
+              this.logger.debug(`[DEBUG] Generated toolText length: ${toolText.length}`);
+              return toolText;
+            }
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n');
+
+        if (toolResults) {
+          this.logger.debug(`[DEBUG] Adding tool results to content, length: ${toolResults.length}`);
+          contentText += toolResults;
+        } else {
+          this.logger.debug('[DEBUG] No tool results to add');
+        }
+      }
+
       uiMessages.push({
         id: msg.id,
         role: msg.role as 'user' | 'assistant' | 'system',
-        parts: [{ type: 'text', text: msg.content }],
+        parts: [{ type: 'text', text: contentText }],
       });
     });
-  
+
     return uiMessages;
   }
 
@@ -102,7 +146,7 @@ export class ChatService {
 
     // EXTRACT TOOL CALL DATA FROM MESSAGE PARTS
     const toolCalls: any[] = [];
-    
+
     responseMessage.parts.forEach((part) => {
       // Check for tool call parts
       if (part.type?.startsWith('tool-') || part.type === 'dynamic-tool') {
@@ -141,45 +185,48 @@ export class ChatService {
     try {
       // Verify ownership
       await this.verifyOwnership(conversationId, userId);
-  
+
       // Get the last user message
       const lastUserMessage = messages[messages.length - 1];
       if (!lastUserMessage) {
         throw new InternalServerErrorException('No user message provided');
       }
-  
+
       // Get conversation history
       const historyMessages = await this.getUIMessages(conversationId);
-      
+
       // Check for duplicate message
       const lastUserMessageText = this.extractTextFromUIMessage(lastUserMessage);
       const lastHistoryMessage = historyMessages[historyMessages.length - 1];
-      const isDuplicate = 
+      const isDuplicate =
         lastHistoryMessage &&
         lastHistoryMessage.role === 'user' &&
         this.extractTextFromUIMessage(lastHistoryMessage) === lastUserMessageText;
-  
+
       // Save user message if not duplicate
       if (!isDuplicate) {
         await this.saveUIMessage(conversationId, lastUserMessage);
         historyMessages.push(lastUserMessage);
       }
-  
-      // Get tools in AI SDK format
-      const tools = this.toolRegistry.toAISDKFormat();
-  
-      // Get StreamText result with tools (if available)
+
+      // Analyze query intent to determine if tools are needed
+      const needsTools = await this.aiService.analyzeQueryIntent(historyMessages);
+
+      // Only get and pass tools if the query intent requires them
+      const tools = needsTools ? this.toolRegistry.toAISDKFormat() : undefined;
+
+      // Get StreamText result with conditional tool support
       const result = this.aiService.streamResponse(
         historyMessages,
         tools,
         5 // Max 5 tool call iterations
       );
-  
+
       // Return streaming response with tool support
       return result.toUIMessageStreamResponse({
         originalMessages: messages,
         generateMessageId: () => this.generateMessageId(),
-  
+
         // Save assistant's response after streaming completes
         onFinish: async ({ responseMessage }) => {
           await this.saveAssistantResponse(conversationId, responseMessage);
@@ -205,10 +252,10 @@ export class ChatService {
     systemPrompt: string,
   ): Promise<ConversationResponseDto> {
     const conversation = await this.verifyOwnership(conversationId, userId);
-  
+
     conversation.systemPrompt = systemPrompt;
     const updated = await this.conversationRepository.save(conversation);
-  
+
     return new ConversationResponseDto({
       id: updated.id,
       title: updated.title,
@@ -224,7 +271,7 @@ export class ChatService {
   ): Promise<ConversationResponseDto[]> {
     const conversations = await this.conversationRepository.find({
       where: { userId },
-      order: { 
+      order: {
         updatedAt: 'DESC',
       },
       relations: {
@@ -233,18 +280,18 @@ export class ChatService {
       // Order messages within each conversation
       relationLoadStrategy: 'query',  // Use separate query for better control
     });
-  
+
     // Manually sort messages and get the actual last one
     return conversations.map((conv) => {
       // Sort messages by createdAt to ensure correct order
       const sortedMessages = [...conv.messages].sort(
         (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
       );
-      
+
       const lastMessage = sortedMessages.length > 0
         ? sortedMessages[sortedMessages.length - 1]
         : null;
-  
+
       return new ConversationResponseDto({
         id: conv.id,
         title: conv.title,
@@ -253,11 +300,11 @@ export class ChatService {
         updatedAt: conv.updatedAt,
         lastMessage: lastMessage
           ? new MessageResponseDto({
-              id: lastMessage.id,
-              role: lastMessage.role,
-              content: lastMessage.content.substring(0, 100),
-              createdAt: lastMessage.createdAt,
-            })
+            id: lastMessage.id,
+            role: lastMessage.role,
+            content: lastMessage.content.substring(0, 100),
+            createdAt: lastMessage.createdAt,
+          })
           : undefined,
       });
     });
@@ -270,10 +317,10 @@ export class ChatService {
   ): Promise<ConversationResponseDto> {
     // Use the new method that includes ordering
     const conversation = await this.verifyOwnershipWithOrderedMessages(
-      conversationId, 
+      conversationId,
       userId
     );
-  
+
     return new ConversationResponseDto({
       id: conversation.id,
       title: conversation.title,
@@ -304,7 +351,7 @@ export class ChatService {
 
   // Verify conversation ownership (without messages)
   private async verifyOwnership(
-    conversationId: string, 
+    conversationId: string,
     userId: string
   ): Promise<Conversation> {
     const conversation = await this.conversationRepository.findOne({

@@ -39,6 +39,88 @@ export class AIService {
     this.logger.log(`  - Text Model: ${this.textModelName} (from AI_TEXT_MODEL)`);
   }
 
+  // Analyze if the query needs web search tools
+  async analyzeQueryIntent(
+    messages: UIMessage[],
+  ): Promise<boolean> {
+    try {
+      // Get the last user message
+      const lastMessage = messages
+        .filter((msg) => msg.role === 'user')
+        .pop();
+
+      if (!lastMessage) {
+        return false;
+      }
+
+      // Extract text from the last message
+      const userQuery = lastMessage.parts
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('');
+
+      // Check if there's a recent web search in conversation history
+      const hasRecentWebSearch = messages
+        .slice(-6) // Check last 6 messages (3 turns)
+        .some((msg) =>
+          msg.role === 'assistant' &&
+          msg.parts.some((part: any) =>
+            part.type?.includes('tool') ||
+            part.toolName === 'tavily_web_search'
+          )
+        );
+
+      // Create analysis prompt
+      const analysisMessages: UIMessage[] = [
+        {
+          id: 'system',
+          role: 'system',
+          parts: [{
+            type: 'text',
+            text: `You are a query intent analyzer. Determine if a user query needs real-time web search.
+
+Answer "YES" if the query:
+- Asks for current/recent events, news, or statistics (e.g., "latest AI trends 2025", "today's weather")
+- Requests real-time information (e.g., "current stock price", "recent developments")
+- Needs up-to-date data that changes frequently
+
+Answer "NO" if the query:
+- Can be answered from general knowledge (e.g., "What is JavaScript?", "Explain OOP")
+- Is a follow-up question to a previous search (context is already available)
+- Asks about your capabilities (e.g., "How can you help me?")
+- Is a general conversation or clarification
+
+${hasRecentWebSearch ? '\nIMPORTANT: The conversation already has recent web search results. Unless the new query is asking for completely different real-time information, answer NO.' : ''}
+
+Reply with ONLY "YES" or "NO".`
+          }]
+        },
+        {
+          id: 'user',
+          role: 'user',
+          parts: [{
+            type: 'text',
+            text: `Query: "${userQuery}"`
+          }]
+        }
+      ];
+
+      // Use fast text model for quick analysis
+      const response = await this.generateResponse(analysisMessages);
+      const needsWebSearch = response.trim().toUpperCase().includes('YES');
+
+      this.logger.log(
+        `🔍 Query intent analysis: "${userQuery.substring(0, 50)}..." → ${needsWebSearch ? 'NEEDS WEB SEARCH' : 'GENERAL KNOWLEDGE'}`
+      );
+
+      return needsWebSearch;
+    } catch (error: any) {
+      this.logger.error(`Query intent analysis failed: ${error.message}`);
+      // On error, default to NOT using web search to avoid unnecessary calls
+      return false;
+    }
+  }
+
   // Stream response with tool support
   streamResponse(
     messages: UIMessage[],
