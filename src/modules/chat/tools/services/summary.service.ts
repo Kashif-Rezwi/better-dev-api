@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { AIService } from '../../ai.service';
+import { AIService } from '../../../core/ai.service';
 import type { UIMessage } from 'ai';
 import type { WebSearchResult } from './tavily.service';
 

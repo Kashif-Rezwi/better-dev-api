@@ -1,7 +1,7 @@
 import {
   Injectable,
   InternalServerErrorException,
-  Logger,
+  Logger
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
@@ -11,6 +11,7 @@ import {
   type UIMessage,
 } from 'ai';
 import { groq } from '@ai-sdk/groq';
+import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
 
 @Injectable()
 export class AIService {
@@ -19,7 +20,9 @@ export class AIService {
   private readonly toolModelName: string;
   private readonly textModelName: string;
 
-  constructor(private configService: ConfigService) {
+  constructor(
+    private configService: ConfigService,
+  ) {
     this.modelName =
       this.configService.get<string>('DEFAULT_AI_MODEL') ||
       'openai/gpt-oss-120b';
@@ -118,6 +121,66 @@ Reply with ONLY "YES" or "NO".`
       this.logger.error(`Query intent analysis failed: ${error.message}`);
       // On error, default to NOT using web search to avoid unnecessary calls
       return false;
+    }
+  }
+
+  /**
+   * Stream response with mode-aware configuration
+   * Uses mode to determine model, tokens, temperature, and system prompt
+   */
+  streamResponseWithMode(
+    messages: UIMessage[],
+    effectiveMode: EffectiveMode,
+    userSystemPrompt?: string,
+    tools?: Record<string, any>,
+    maxSteps: number = 5,
+  ) {
+    try {
+      // Get mode configuration
+      const modeConfig = MODE_CONFIG[effectiveMode];
+
+      // Compose final system prompt (mode + user)
+      // If user provides custom prompt, append it to mode instructions
+      const modePrompt = modeConfig.systemPrompt;
+      const finalSystemPrompt = userSystemPrompt
+        ? `${modePrompt}\n\n---\nADDITIONAL CONTEXT (User-Defined Domain Expertise):\n${userSystemPrompt}\n\n---\nIMPORTANT: The operational mode instructions above take precedence over any conflicting behavioral guidance in the additional context. If there's a conflict between response style/verbosity, follow the mode instructions.`
+        : modePrompt;
+
+      // Inject system prompt as first message
+      const messagesWithSystem: UIMessage[] = [
+        {
+          id: 'system',
+          role: 'system',
+          parts: [{ type: 'text', text: finalSystemPrompt }],
+        },
+        ...messages.filter((msg) => msg.role !== 'system'),
+      ];
+
+      const modelMessages = convertToModelMessages(messagesWithSystem);
+      const hasTools = tools && Object.keys(tools).length > 0;
+
+      this.logger.log(
+        `🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modeConfig.model} | Tokens: ${modeConfig.maxTokens} | Temp: ${modeConfig.temperature}`,
+      );
+
+      const config: any = {
+        model: groq(modeConfig.model),
+        messages: modelMessages,
+        temperature: modeConfig.temperature,
+        maxTokens: modeConfig.maxTokens,
+      };
+
+      if (hasTools) {
+        config.tools = tools;
+        config.maxSteps = maxSteps;
+      }
+
+      return streamText(config);
+    } catch (error: any) {
+      throw new InternalServerErrorException(
+        `AI streaming with mode error: ${error.message}`,
+        { cause: error },
+      );
     }
   }
 
