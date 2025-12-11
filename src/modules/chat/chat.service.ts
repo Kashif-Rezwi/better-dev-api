@@ -21,6 +21,7 @@ import { ModeResolverService } from './modes/mode-resolver.service';
 import { MODE_CONFIG } from './modes/mode.config';
 import type { OperationalMode } from './modes/mode.config';
 import type { ModeMetadata } from './types/operational-mode.type';
+import { MessageUtils } from './utils/message.utils';
 
 @Injectable()
 export class ChatService {
@@ -120,10 +121,7 @@ export class ChatService {
 
   // Extract text content from UIMessage parts
   private extractTextFromUIMessage(message: UIMessage): string {
-    return message.parts
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('');
+    return MessageUtils.extractText(message);
   }
 
   // Save UIMessage to database
@@ -191,17 +189,15 @@ export class ChatService {
     try {
       // Verify ownership and load user for mode resolution
       const conversation = await this.verifyOwnershipWithOrderedMessages(conversationId, userId);
-      const user = conversation.user;
-
-      if (!user) {
-        throw new InternalServerErrorException('User not found');
-      }
 
       // Get the last user message
-      const lastUserMessage = messages[messages.length - 1];
-      if (!lastUserMessage) {
+      const inputMessage = messages[messages.length - 1];
+      if (!inputMessage) {
         throw new InternalServerErrorException('No user message provided');
       }
+
+      // Normalize message to ensure it complies with AI SDK (requires parts)
+      const lastUserMessage = MessageUtils.normalize(inputMessage);
 
       // Get conversation history
       const historyMessages = await this.getUIMessages(conversationId);
@@ -355,6 +351,7 @@ export class ChatService {
         id: conv.id,
         title: conv.title,
         systemPrompt: conv.systemPrompt,
+        operationalMode: conv.operationalMode,
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         lastMessage: lastMessage

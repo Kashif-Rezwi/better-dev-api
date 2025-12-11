@@ -3,6 +3,7 @@ import type { UIMessage } from 'ai';
 import { AIService } from '../../core/ai.service';
 import type { EffectiveMode } from './mode.config';
 import { ClassificationCacheService } from './classification-cache.service';
+import { MessageUtils } from '../utils/message.utils';
 
 /**
  * Auto Classifier Service
@@ -42,10 +43,7 @@ export class AutoClassifierService {
             }
 
             // Extract query text
-            const query = lastMessage.parts
-                .filter((part) => part.type === 'text')
-                .map((part) => part.text)
-                .join('');
+            const query = MessageUtils.extractText(lastMessage);
 
             // Quick heuristic pre-filter for very short queries
             if (query.trim().length < 15) {

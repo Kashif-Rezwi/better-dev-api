@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { EffectiveMode } from './mode.config';
 import type { UIMessage } from 'ai';
 import { createHash } from 'crypto';
+import { MessageUtils } from '../utils/message.utils';
 
 /**
  * Cache entry with expiration
@@ -46,10 +47,7 @@ export class ClassificationCacheService {
             return 'empty';
         }
 
-        const text = lastUserMsg.parts
-            .filter((p) => p.type === 'text')
-            .map((p) => p.text)
-            .join('');
+        const text = MessageUtils.extractText(lastUserMsg);
 
         // Create deterministic hash
         return createHash('md5').update(text.trim()).digest('hex');

@@ -12,6 +12,7 @@ import {
 } from 'ai';
 import { groq } from '@ai-sdk/groq';
 import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
+import { MessageUtils } from '../chat/utils/message.utils';
 
 @Injectable()
 export class AIService {
@@ -57,20 +58,13 @@ export class AIService {
       }
 
       // Extract text from the last message
-      const userQuery = lastMessage.parts
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text)
-        .join('');
+      const userQuery = MessageUtils.extractText(lastMessage);
 
       // Check if there's a recent web search in conversation history
       const hasRecentWebSearch = messages
         .slice(-6) // Check last 6 messages (3 turns)
         .some((msg) =>
-          msg.role === 'assistant' &&
-          msg.parts.some((part: any) =>
-            part.type?.includes('tool') ||
-            part.toolName === 'tavily_web_search'
-          )
+          msg.role === 'assistant' && MessageUtils.hasToolContent(msg, 'tavily_web_search')
         );
 
       // Create analysis prompt
