@@ -1,4 +1,5 @@
-import { IsString, IsOptional, MaxLength, IsNotEmpty } from 'class-validator';
+import { IsString, IsOptional, MaxLength, IsNotEmpty, IsEnum } from 'class-validator';
+import type { OperationalMode } from '../modes/mode.config';
 
 export class CreateConversationWithMessageDto {
   @IsString()
@@ -15,4 +16,10 @@ export class CreateConversationWithMessageDto {
   @IsNotEmpty()
   @MaxLength(10000)
   firstMessage: string;
+
+  @IsOptional()
+  @IsEnum(['fast', 'thinking', 'auto'], {
+    message: 'operationalMode must be one of: fast, thinking, auto',
+  })
+  operationalMode?: OperationalMode;
 }

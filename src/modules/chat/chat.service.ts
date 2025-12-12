@@ -13,10 +13,15 @@ import {
   ConversationResponseDto,
   MessageResponseDto,
 } from './dto/conversation-response.dto';
-import { AIService } from './ai.service';
+import { AIService } from '../core/ai.service';
 import { UIMessage } from 'ai';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
 import { ToolRegistry } from './tools/tool.registry';
+import { ModeResolverService } from './modes/mode-resolver.service';
+import { MODE_CONFIG } from './modes/mode.config';
+import type { OperationalMode } from './modes/mode.config';
+import type { ModeMetadata } from './types/operational-mode.type';
+import { MessageUtils } from './utils/message.utils';
 
 @Injectable()
 export class ChatService {
@@ -29,6 +34,7 @@ export class ChatService {
     private messageRepository: Repository<Message>,
     private aiService: AIService,
     private toolRegistry: ToolRegistry,
+    private modeResolver: ModeResolverService,
   ) { }
 
   // Convert database messages to UIMessage format for AI SDK
@@ -115,10 +121,7 @@ export class ChatService {
 
   // Extract text content from UIMessage parts
   private extractTextFromUIMessage(message: UIMessage): string {
-    return message.parts
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('');
+    return MessageUtils.extractText(message);
   }
 
   // Save UIMessage to database
@@ -181,16 +184,20 @@ export class ChatService {
     conversationId: string,
     userId: string,
     messages: UIMessage[],
+    modeOverride?: OperationalMode,
   ) {
     try {
-      // Verify ownership
-      await this.verifyOwnership(conversationId, userId);
+      // Verify ownership and load user for mode resolution
+      const conversation = await this.verifyOwnershipWithOrderedMessages(conversationId, userId);
 
       // Get the last user message
-      const lastUserMessage = messages[messages.length - 1];
-      if (!lastUserMessage) {
+      const inputMessage = messages[messages.length - 1];
+      if (!inputMessage) {
         throw new InternalServerErrorException('No user message provided');
       }
+
+      // Normalize message to ensure it complies with AI SDK (requires parts)
+      const lastUserMessage = MessageUtils.normalize(inputMessage);
 
       // Get conversation history
       const historyMessages = await this.getUIMessages(conversationId);
@@ -209,15 +216,31 @@ export class ChatService {
         historyMessages.push(lastUserMessage);
       }
 
+      // === MODE RESOLUTION ===
+      const { requested, effective } = await this.modeResolver.resolveMode(
+        conversation,
+        historyMessages,
+        modeOverride,
+      );
+
+      this.logger.log(
+        `🎯 Mode resolved: ${requested}${requested === 'auto' ? ` → ${effective}` : ''} (conversation: ${conversationId})`,
+      );
+
       // Analyze query intent to determine if tools are needed
       const needsTools = await this.aiService.analyzeQueryIntent(historyMessages);
 
       // Only get and pass tools if the query intent requires them
       const tools = needsTools ? this.toolRegistry.toAISDKFormat() : undefined;
 
-      // Get StreamText result with conditional tool support
-      const result = this.aiService.streamResponse(
+      // Get mode configuration for metadata
+      const modeConfig = MODE_CONFIG[effective];
+
+      // Get StreamText result with MODE-AWARE streaming
+      const result = this.aiService.streamResponseWithMode(
         historyMessages,
+        effective,
+        conversation.systemPrompt,
         tools,
         5 // Max 5 tool call iterations
       );
@@ -227,9 +250,19 @@ export class ChatService {
         originalMessages: messages,
         generateMessageId: () => this.generateMessageId(),
 
-        // Save assistant's response after streaming completes
+        // Save assistant's response with mode metadata
         onFinish: async ({ responseMessage }) => {
-          await this.saveAssistantResponse(conversationId, responseMessage);
+          await this.saveAssistantResponseWithMode(
+            conversationId,
+            responseMessage,
+            {
+              requested,
+              effective,
+              modelUsed: modeConfig.model,
+              tokensUsed: undefined, // Token usage tracking not available yet
+              temperature: modeConfig.temperature,
+            },
+          );
         },
       });
     } catch (error: any) {
@@ -260,6 +293,28 @@ export class ChatService {
       id: updated.id,
       title: updated.title,
       systemPrompt: updated.systemPrompt,
+      operationalMode: updated.operationalMode,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    });
+  }
+
+  // Update conversation operational mode
+  async updateConversationMode(
+    conversationId: string,
+    userId: string,
+    mode: OperationalMode,
+  ): Promise<ConversationResponseDto> {
+    const conversation = await this.verifyOwnership(conversationId, userId);
+
+    conversation.operationalMode = mode;
+    const updated = await this.conversationRepository.save(conversation);
+
+    return new ConversationResponseDto({
+      id: updated.id,
+      title: updated.title,
+      systemPrompt: updated.systemPrompt,
+      operationalMode: updated.operationalMode,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     });
@@ -296,6 +351,7 @@ export class ChatService {
         id: conv.id,
         title: conv.title,
         systemPrompt: conv.systemPrompt,
+        operationalMode: conv.operationalMode,
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         lastMessage: lastMessage
@@ -325,6 +381,7 @@ export class ChatService {
       id: conversation.id,
       title: conversation.title,
       systemPrompt: conversation.systemPrompt,
+      operationalMode: conversation.operationalMode,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
       messages: conversation.messages.map(
@@ -379,20 +436,63 @@ export class ChatService {
       relations: ['messages'],
       order: {
         messages: {
-          createdAt: 'ASC'
+          createdAt: 'ASC',
         },
       },
     });
 
     if (!conversation) {
-      throw new NotFoundException('Conversation not found');
+      throw new NotFoundException(`Conversation ${conversationId} not found`);
     }
 
     if (conversation.userId !== userId) {
-      throw new ForbiddenException('Access denied');
+      throw new ForbiddenException('Access denied to this conversation');
     }
 
     return conversation;
+  }
+
+  // Save the assistant's response after streaming completes WITH MODE METADATA
+  private async saveAssistantResponseWithMode(
+    conversationId: string,
+    responseMessage: UIMessage,
+    modeMetadata: ModeMetadata,
+  ): Promise<void> {
+    const content = this.extractTextFromUIMessage(responseMessage);
+
+    // EXTRACT TOOL CALL DATA FROM MESSAGE PARTS
+    const toolCalls: any[] = [];
+
+    responseMessage.parts.forEach((part) => {
+      // Check for tool call parts
+      if (part.type?.startsWith('tool-') || part.type === 'dynamic-tool') {
+        toolCalls.push({
+          type: part.type,
+          toolName: (part as any).toolName || part.type.replace('tool-', ''),
+          state: (part as any).state,
+          output: (part as any).output,
+          errorText: (part as any).errorText,
+        });
+      }
+    });
+
+    // Create message with mode metadata
+    const dbMessage = this.messageRepository.create({
+      conversationId,
+      role: responseMessage.role as MessageRole,
+      content,
+      metadata: {
+        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+        mode: modeMetadata,  // Add mode metadata
+      },
+    });
+
+    await this.messageRepository.save(dbMessage);
+
+    // Update conversation timestamp
+    await this.conversationRepository.update(conversationId, {
+      updatedAt: new Date(),
+    });
   }
 
   // Generate title for a conversation
@@ -446,6 +546,7 @@ export class ChatService {
         userId,
         title: dto.title || 'Untitled',
         systemPrompt: dto.systemPrompt,
+        operationalMode: dto.operationalMode,
       });
 
       const savedConversation = await this.conversationRepository.save(conversation);
@@ -469,6 +570,7 @@ export class ChatService {
         id: savedConversation.id,
         title: savedConversation.title,
         systemPrompt: savedConversation.systemPrompt,
+        operationalMode: savedConversation.operationalMode,
         createdAt: savedConversation.createdAt,
         updatedAt: savedConversation.updatedAt,
       };
