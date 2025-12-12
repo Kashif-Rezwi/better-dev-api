@@ -73,11 +73,12 @@ Better DEV AI Backend is a production-ready NestJS application that powers an in
 │  │  │ AuthService │  │ ChatService  │  │  UserService  │   │    │
 │  │  └──────┬──────┘  └──────┬───────┘  └───────┬───────┘   │    │
 │  │         │                │                  │           │    │
-│  │         │    ┌───────────┴──────────┐       │           │    │
-│  │         │    │    AIService         │       │           │    │
-│  │         │    │  - streamResponse()  │       │           │    │
-│  │         │    │  - generateResponse()│       │           │    │
-│  │         │    └───────────┬──────────┘       │           │    │
+│  │         │    ┌───────────┴────────────┐     │           │    │
+│  │         │    │    AIService           │     │           │    │
+│  │         │    │  - analyzeQueryIntent()│     │           │    │
+│  │         │    │  - streamResponse()    │     │           │    │
+│  │         │    │  - generateResponse()  │     │           │    │
+│  │         │    └───────────┬────────────┘     │           │    │
 │  │         │                │                  │           │    │
 │  └─────────┼────────────────┼──────────────────┼───────────┘    │
 │            │                │                  │                │
@@ -163,6 +164,7 @@ Database Transaction Flow:
   - Type-safe tool definitions with Zod
   - Automatic tool registration
   - Built-in web search with Tavily
+  - Automatically determines if queries need web search
 
 - **💬 Conversation Management**
   - Persistent conversation history
@@ -617,6 +619,85 @@ Response: 200 OK
   "timestamp": "2025-01-01T00:00:00.000Z",
   "service": "better-dev-ai-chat"
 }
+```
+
+---
+
+## 🧠 AI Service & Intelligent Query Routing
+
+### Query Intent Analysis
+
+The AI Service includes an intelligent query intent analyzer that optimizes tool usage and reduces unnecessary API calls. The `analyzeQueryIntent()` method automatically determines whether a user query requires real-time web search or can be answered from general knowledge.
+
+### How It Works
+
+```typescript
+// Automatically analyzes each query
+const needsWebSearch = await aiService.analyzeQueryIntent(messages);
+
+// Routes to appropriate model
+if (needsWebSearch) {
+  // Use tool-calling model with web search
+  stream = aiService.streamResponse(messages, tools);
+} else {
+  // Use fast text model without tools
+  stream = aiService.streamResponse(messages);
+}
+```
+
+### Intelligence Features
+
+**✅ Queries that trigger web search:**
+- Current/recent events and news (e.g., "latest AI trends 2025")
+- Real-time information (e.g., "today's weather", "current stock price")
+- Up-to-date data that changes frequently
+
+**❌ Queries that use general knowledge:**
+- General knowledge questions (e.g., "What is JavaScript?", "Explain OOP")
+- Follow-up questions to previous searches (context already available)
+- Questions about AI capabilities
+- General conversation and clarification
+
+### Smart Conversation Context
+
+The analyzer checks recent conversation history (last 3 turns) to detect if web search was recently performed. This prevents redundant searches when:
+- User asks follow-up questions about search results
+- Context is already available from previous tool calls
+- User is refining or clarifying a previous query
+
+### Benefits
+
+- **💰 Cost Optimization** - Avoids unnecessary tool-calling model usage
+- **⚡ Faster Responses** - Uses lightweight models when appropriate
+- **🎯 Better UX** - Reduces wait time for simple queries
+- **🔍 Smarter Tool Usage** - Only searches when truly needed
+
+### Configuration
+
+The feature uses different AI models for different tasks:
+
+```env
+# Fast model for query analysis and simple responses
+AI_TEXT_MODEL=llama-3.1-8b-instant
+
+# Powerful model for tool calling and complex tasks
+AI_TOOL_MODEL=llama-3.3-70b-versatile
+```
+
+### Example Flow
+
+```
+User: "What is machine learning?"
+  ↓
+AnalyzeQueryIntent() → NO (general knowledge)
+  ↓
+Use fast text model → Quick response
+  ↓
+User: "What are the latest ML breakthroughs in 2025?"
+  ↓
+AnalyzeQueryIntent() → YES (current events)
+  ↓
+Use tool model + web search → Real-time results
 ```
 
 ---

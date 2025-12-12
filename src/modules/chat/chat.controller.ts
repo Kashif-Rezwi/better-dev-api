@@ -19,12 +19,13 @@ import { ChatRequestDto } from './dto/chat-request.dto';
 import type { UIMessage } from 'ai';
 import { UpdateSystemPromptDto } from './dto/update-system-prompt.dto';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
+import { UpdateOperationalModeDto } from './dto/update-operational-mode.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
 export class ChatController {
-  constructor(private chatService: ChatService) {}
-  
+  constructor(private chatService: ChatService) { }
+
   @Post('conversations/with-message')
   async createConversationWithMessage(
     @Req() req,
@@ -35,7 +36,7 @@ export class ChatController {
       req.user.userId,
       dto,
     );
-  
+
     // Return conversation data as JSON (no streaming)
     return result;
   }
@@ -70,6 +71,7 @@ export class ChatController {
       conversationId,
       req.user.userId,
       chatRequest.messages as UIMessage[],
+      chatRequest.modeOverride,  // Pass mode override
     );
 
     // Copy headers from AI SDK response to Express response
@@ -83,7 +85,7 @@ export class ChatController {
     // Stream the body
     if (streamResponse.body) {
       const reader = streamResponse.body.getReader();
-      
+
       try {
         while (true) {
           const { done, value } = await reader.read();
@@ -110,7 +112,7 @@ export class ChatController {
       req.user.userId,
       body.message,
     );
-    
+
     return { title };
   }
 
@@ -124,6 +126,19 @@ export class ChatController {
       conversationId,
       req.user.userId,
       body.systemPrompt,
+    );
+  }
+
+  @Put('conversations/:id/operational-mode')
+  async updateConversationMode(
+    @Req() req,
+    @Param('id') conversationId: string,
+    @Body() dto: UpdateOperationalModeDto,
+  ) {
+    return this.chatService.updateConversationMode(
+      conversationId,
+      req.user.userId,
+      dto.mode,
     );
   }
 }
