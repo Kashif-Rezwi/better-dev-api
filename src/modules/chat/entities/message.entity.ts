@@ -7,7 +7,7 @@ import {
   JoinColumn,
 } from 'typeorm';
 import { Conversation } from './conversation.entity';
-import type { ModeMetadata } from '../types/operational-mode.type';
+import type { MessageMetadata } from '../types/message-metadata.type';
 
 export enum MessageRole {
   USER = 'user',
@@ -39,11 +39,7 @@ export class Message {
   content: string;
 
   @Column('jsonb', { nullable: true })
-  metadata?: {
-    toolCalls?: any[];
-    citations?: any[];
-    mode?: ModeMetadata;
-  };
+  metadata?: MessageMetadata;
 
   @CreateDateColumn()
   createdAt: Date;

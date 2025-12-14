@@ -1,8 +1,9 @@
-import { IsArray, IsOptional, IsEnum } from 'class-validator';
+import { IsArray, IsOptional, IsEnum, ArrayNotEmpty } from 'class-validator';
 import type { OperationalMode } from '../modes/mode.config';
 
 export class ChatRequestDto {
   @IsArray()
+  @ArrayNotEmpty({ message: 'messages must contain at least one message' })
   messages: any[];
 
   @IsOptional()

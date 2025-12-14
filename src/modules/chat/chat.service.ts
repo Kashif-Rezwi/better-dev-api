@@ -20,7 +20,7 @@ import { ToolRegistry } from './tools/tool.registry';
 import { ModeResolverService } from './modes/mode-resolver.service';
 import { MODE_CONFIG } from './modes/mode.config';
 import type { OperationalMode } from './modes/mode.config';
-import type { ModeMetadata } from './types/operational-mode.type';
+import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
 import { MessageUtils } from './utils/message.utils';
 
 @Injectable()
@@ -76,36 +76,41 @@ export class ChatService {
         this.logger.debug('[DEBUG] Found metadata.toolCalls: ' + JSON.stringify(msg.metadata.toolCalls, null, 2));
 
         const toolResults = msg.metadata.toolCalls
-          .filter((toolCall: any) => toolCall.output)
-          .map((toolCall: any) => {
-            this.logger.debug(`[DEBUG] Processing toolCall: ${toolCall.toolName} has output: ${!!toolCall.output}`);
-            if (toolCall.toolName === 'tavily_web_search' && toolCall.output) {
-              const output = toolCall.output;
-              this.logger.debug('[DEBUG] Output structure: ' + Object.keys(output).join(', '));
-              // Include the summary and results in the text content
-              let toolText = '\n\n[Web Search Results]:\n';
-              if (output.summary) {
-                toolText += `Summary: ${output.summary}\n\n`;
-              }
-              if (output.results && Array.isArray(output.results)) {
-                toolText += `Sources:\n`;
-                output.results.forEach((result: any, index: number) => {
-                  toolText += `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.content}\n\n`;
-                });
-              }
-              this.logger.debug(`[DEBUG] Generated toolText length: ${toolText.length}`);
-              return toolText;
+          // Filter for web search tools that have output
+          .filter((toolCall: ToolCallMetadata) =>
+            toolCall.toolName === 'tavily_web_search' && toolCall.output
+          )
+          .map((toolCall: ToolCallMetadata) => {
+            // TypeScript knows output exists due to filter above
+            const output = toolCall.output!;
+
+            this.logger.debug('[DEBUG] Processing web search output');
+            this.logger.debug('[DEBUG] Output structure: ' + Object.keys(output).join(', '));
+
+            // Format web search results as text
+            let toolText = '\n\n[Web Search Results]:\n';
+
+            if (output.summary) {
+              toolText += `Summary: ${output.summary}\n\n`;
             }
-            return '';
+
+            if (output.results && Array.isArray(output.results)) {
+              toolText += `Sources:\n`;
+              output.results.forEach((result: any, index: number) => {
+                toolText += `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.content}\n\n`;
+              });
+            }
+
+            this.logger.debug(`[DEBUG] Generated toolText length: ${toolText.length}`);
+            return toolText;
           })
-          .filter(Boolean)
           .join('\n');
 
         if (toolResults) {
           this.logger.debug(`[DEBUG] Adding tool results to content, length: ${toolResults.length}`);
           contentText += toolResults;
         } else {
-          this.logger.debug('[DEBUG] No tool results to add');
+          this.logger.debug('[DEBUG] No web search results to add');
         }
       }
 
@@ -148,7 +153,7 @@ export class ChatService {
     const content = this.extractTextFromUIMessage(responseMessage);
 
     // EXTRACT TOOL CALL DATA FROM MESSAGE PARTS
-    const toolCalls: any[] = [];
+    const toolCalls: ToolCallMetadata[] = [];
 
     responseMessage.parts.forEach((part) => {
       // Check for tool call parts
@@ -158,7 +163,8 @@ export class ChatService {
           toolName: (part as any).toolName || part.type.replace('tool-', ''),
           state: (part as any).state,
           output: (part as any).output,
-          errorText: (part as any).errorText,
+          input: (part as any).input,
+          toolCallId: (part as any).toolCallId,
         });
       }
     });
@@ -218,7 +224,6 @@ export class ChatService {
 
       // === MODE RESOLUTION ===
       const { requested, effective } = await this.modeResolver.resolveMode(
-        conversation,
         historyMessages,
         modeOverride,
       );
@@ -250,17 +255,17 @@ export class ChatService {
         originalMessages: messages,
         generateMessageId: () => this.generateMessageId(),
 
-        // Save assistant's response with mode metadata
+        // Save assistant's response with complete metadata
         onFinish: async ({ responseMessage }) => {
           await this.saveAssistantResponseWithMode(
             conversationId,
             responseMessage,
             {
-              requested,
-              effective,
+              operationalMode: requested,
+              effectiveMode: effective,
               modelUsed: modeConfig.model,
-              tokensUsed: undefined, // Token usage tracking not available yet
               temperature: modeConfig.temperature,
+              tokensUsed: undefined, // Future implementation
             },
           );
         },
@@ -293,28 +298,6 @@ export class ChatService {
       id: updated.id,
       title: updated.title,
       systemPrompt: updated.systemPrompt,
-      operationalMode: updated.operationalMode,
-      createdAt: updated.createdAt,
-      updatedAt: updated.updatedAt,
-    });
-  }
-
-  // Update conversation operational mode
-  async updateConversationMode(
-    conversationId: string,
-    userId: string,
-    mode: OperationalMode,
-  ): Promise<ConversationResponseDto> {
-    const conversation = await this.verifyOwnership(conversationId, userId);
-
-    conversation.operationalMode = mode;
-    const updated = await this.conversationRepository.save(conversation);
-
-    return new ConversationResponseDto({
-      id: updated.id,
-      title: updated.title,
-      systemPrompt: updated.systemPrompt,
-      operationalMode: updated.operationalMode,
       createdAt: updated.createdAt,
       updatedAt: updated.updatedAt,
     });
@@ -351,7 +334,6 @@ export class ChatService {
         id: conv.id,
         title: conv.title,
         systemPrompt: conv.systemPrompt,
-        operationalMode: conv.operationalMode,
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
         lastMessage: lastMessage
@@ -381,7 +363,6 @@ export class ChatService {
       id: conversation.id,
       title: conversation.title,
       systemPrompt: conversation.systemPrompt,
-      operationalMode: conversation.operationalMode,
       createdAt: conversation.createdAt,
       updatedAt: conversation.updatedAt,
       messages: conversation.messages.map(
@@ -456,12 +437,12 @@ export class ChatService {
   private async saveAssistantResponseWithMode(
     conversationId: string,
     responseMessage: UIMessage,
-    modeMetadata: ModeMetadata,
+    messageMetadata: Pick<MessageMetadata, 'operationalMode' | 'effectiveMode' | 'modelUsed' | 'temperature' | 'tokensUsed'>,
   ): Promise<void> {
     const content = this.extractTextFromUIMessage(responseMessage);
 
     // EXTRACT TOOL CALL DATA FROM MESSAGE PARTS
-    const toolCalls: any[] = [];
+    const toolCalls: ToolCallMetadata[] = [];
 
     responseMessage.parts.forEach((part) => {
       // Check for tool call parts
@@ -471,20 +452,23 @@ export class ChatService {
           toolName: (part as any).toolName || part.type.replace('tool-', ''),
           state: (part as any).state,
           output: (part as any).output,
-          errorText: (part as any).errorText,
+          input: (part as any).input,
+          toolCallId: (part as any).toolCallId,
         });
       }
     });
 
-    // Create message with mode metadata
+    // Create message with complete metadata (flat structure)
+    const metadata: MessageMetadata = {
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      ...messageMetadata,
+    };
+
     const dbMessage = this.messageRepository.create({
       conversationId,
       role: responseMessage.role as MessageRole,
       content,
-      metadata: {
-        toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-        mode: modeMetadata,  // Add mode metadata
-      },
+      metadata,
     });
 
     await this.messageRepository.save(dbMessage);
@@ -546,7 +530,6 @@ export class ChatService {
         userId,
         title: dto.title || 'Untitled',
         systemPrompt: dto.systemPrompt,
-        operationalMode: dto.operationalMode,
       });
 
       const savedConversation = await this.conversationRepository.save(conversation);
@@ -570,7 +553,6 @@ export class ChatService {
         id: savedConversation.id,
         title: savedConversation.title,
         systemPrompt: savedConversation.systemPrompt,
-        operationalMode: savedConversation.operationalMode,
         createdAt: savedConversation.createdAt,
         updatedAt: savedConversation.updatedAt,
       };
