@@ -27,7 +27,7 @@ export class ToolRegistry implements OnModuleInit {
     if (this.tools.has(tool.name)) {
       throw new Error(
         `Tool with name '${tool.name}' is already registered. ` +
-          `Tool names must be unique.`,
+        `Tool names must be unique.`,
       );
     }
 
@@ -68,7 +68,7 @@ export class ToolRegistry implements OnModuleInit {
   // Convert tools to AI SDK format
   toAISDKFormat(): Record<string, any> {
     const aiTools: Record<string, any> = {};
-  
+
     this.tools.forEach((tool) => {
       aiTools[tool.name] = {
         description: tool.description,
@@ -76,7 +76,7 @@ export class ToolRegistry implements OnModuleInit {
         execute: tool.execute.bind(tool),
       };
     });
-  
+
     this.logger.debug(`Converted ${this.tools.size} tools to AI SDK format`);
     return aiTools;
   }
@@ -95,7 +95,7 @@ export class ToolRegistry implements OnModuleInit {
     if (!/^[a-z_]+$/.test(tool.name)) {
       throw new Error(
         `Tool name '${tool.name}' is invalid. ` +
-          `Use lowercase letters and underscores only (e.g., 'web_search')`,
+        `Use lowercase letters and underscores only (e.g., 'web_search')`,
       );
     }
 
@@ -123,12 +123,12 @@ export class ToolRegistry implements OnModuleInit {
 
   private wrapToolWithLogging(tool: Tool): Tool {
     const originalExecute = tool.execute.bind(tool);
-    
+
     return {
       ...tool,
       execute: async (params: any) => {
         const startTime = Date.now();
-        
+
         // 📥 Log tool start
         this.logger.log({
           event: 'tool_execution_start',
@@ -136,12 +136,12 @@ export class ToolRegistry implements OnModuleInit {
           params: params,
           timestamp: new Date().toISOString(),
         });
-        
+
         try {
           // Execute the actual tool
           const result = await originalExecute(params);
           const duration = Date.now() - startTime;
-          
+
           // ✅ Log tool success
           this.logger.log({
             event: 'tool_execution_success',
@@ -150,11 +150,11 @@ export class ToolRegistry implements OnModuleInit {
             resultSize: JSON.stringify(result).length,
             timestamp: new Date().toISOString(),
           });
-          
+
           return result;
         } catch (error: any) {
           const duration = Date.now() - startTime;
-          
+
           // ❌ Log tool error
           this.logger.error({
             event: 'tool_execution_error',
@@ -163,7 +163,7 @@ export class ToolRegistry implements OnModuleInit {
             error: error.message,
             timestamp: new Date().toISOString(),
           });
-          
+
           throw error;
         }
       }

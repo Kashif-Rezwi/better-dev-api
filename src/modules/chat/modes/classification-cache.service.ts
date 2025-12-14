@@ -26,12 +26,13 @@ export class ClassificationCacheService {
     private readonly logger = new Logger(ClassificationCacheService.name);
     private cache = new Map<string, CacheEntry>();
     private readonly TTL_MS = 5 * 60 * 1000; // 5 minutes
+    private readonly MAX_CACHE_SIZE = 1000; // Maximum cache entries
     private cleanupInterval: NodeJS.Timeout;
 
     constructor() {
         // Start cleanup interval
         this.cleanupInterval = setInterval(() => this.cleanExpired(), 60000);
-        this.logger.log('Classification cache initialized (TTL: 5 minutes)');
+        this.logger.log('Classification cache initialized (TTL: 5 minutes, Max size: 1000)');
     }
 
     /**
@@ -75,8 +76,18 @@ export class ClassificationCacheService {
 
     /**
      * Set classification in cache with TTL
+     * Implements FIFO eviction when cache is full
      */
     set(key: string, mode: EffectiveMode): void {
+        // Evict oldest entry if cache is full (FIFO)
+        if (this.cache.size >= this.MAX_CACHE_SIZE) {
+            const firstKey = this.cache.keys().next().value;
+            if (firstKey) {
+                this.cache.delete(firstKey);
+                this.logger.debug(`Cache full, evicted oldest entry: ${firstKey}`);
+            }
+        }
+
         const expiresAt = Date.now() + this.TTL_MS;
         this.cache.set(key, { mode, expiresAt });
         this.logger.debug(`Cache set: ${key} → ${mode} (expires: ${new Date(expiresAt).toISOString()})`);

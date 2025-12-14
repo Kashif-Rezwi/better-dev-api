@@ -17,6 +17,10 @@ import { MessageUtils } from '../utils/message.utils';
 export class AutoClassifierService {
     private readonly logger = new Logger(AutoClassifierService.name);
 
+    // Configuration constants
+    private readonly SHORT_QUERY_THRESHOLD = 15; // characters
+    private readonly CLASSIFICATION_TIMEOUT_MS = 5000; // 5 seconds
+
     constructor(
         private aiService: AIService,
         private cache: ClassificationCacheService,
@@ -46,8 +50,8 @@ export class AutoClassifierService {
             const query = MessageUtils.extractText(lastMessage);
 
             // Quick heuristic pre-filter for very short queries
-            if (query.trim().length < 15) {
-                this.logger.log(`Auto-classified as FAST (very short query: ${query.length} chars)`);
+            if (query.trim().length < this.SHORT_QUERY_THRESHOLD) {
+                this.logger.log(`Auto-classified as FAST (very short query: ${query.length} chars, threshold: ${this.SHORT_QUERY_THRESHOLD})`);
                 return 'fast';
             }
 
@@ -105,7 +109,7 @@ Reply with ONLY "SIMPLE" or "COMPLEX". No explanation needed.`,
             ];
 
             // Call AI with timeout
-            const response = await this.classifyWithTimeout(classificationPrompt, 5000);
+            const response = await this.classifyWithTimeout(classificationPrompt, this.CLASSIFICATION_TIMEOUT_MS);
             const isComplex = response.trim().toUpperCase().includes('COMPLEX');
 
             const result: EffectiveMode = isComplex ? 'thinking' : 'fast';
