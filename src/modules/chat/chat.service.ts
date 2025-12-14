@@ -250,23 +250,37 @@ export class ChatService {
         5 // Max 5 tool call iterations
       );
 
+      // Prepare metadata structure for streaming and database save
+      const baseMetadata = {
+        operationalMode: requested,
+        effectiveMode: effective,
+        modelUsed: modeConfig.model,
+        temperature: modeConfig.temperature,
+        tokensUsed: undefined, // Future: Extract from AI response
+      };
+
       // Return streaming response with tool support
       return result.toUIMessageStreamResponse({
         originalMessages: messages,
         generateMessageId: () => this.generateMessageId(),
 
-        // Save assistant's response with complete metadata
+        // Stream metadata to frontend (enables immediate mode indicator & timestamp)
+        messageMetadata: ({ part }) =>
+          part.type === 'finish'
+            ? {
+              createdAt: new Date().toISOString(),
+              ...baseMetadata,
+              tokensUsed: part.totalUsage?.totalTokens,
+              finishReason: part.finishReason,
+            }
+            : undefined,
+
+        // Save assistant's response with complete metadata to database
         onFinish: async ({ responseMessage }) => {
           await this.saveAssistantResponseWithMode(
             conversationId,
             responseMessage,
-            {
-              operationalMode: requested,
-              effectiveMode: effective,
-              modelUsed: modeConfig.model,
-              temperature: modeConfig.temperature,
-              tokensUsed: undefined, // Future implementation
-            },
+            baseMetadata,
           );
         },
       });
