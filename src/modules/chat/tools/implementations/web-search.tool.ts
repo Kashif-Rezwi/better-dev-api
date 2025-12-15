@@ -24,8 +24,8 @@ interface Citation {
 @Injectable()
 export class WebSearchTool implements Tool<any, WebSearchToolResult> {
   readonly name = 'tavily_web_search';
-  
-  readonly description = 
+
+  readonly description =
     'Search the web for current information, news, and real-time data. ' +
     'Use this tool when you need up-to-date information that may not be in your training data, ' +
     'such as recent events, current statistics, latest news, or real-time information. ' +
@@ -55,7 +55,7 @@ export class WebSearchTool implements Tool<any, WebSearchToolResult> {
   constructor(
     private readonly tavilyService: TavilyService,
     private readonly summaryService: SummaryService,
-  ) {}
+  ) { }
 
   async execute(params: z.infer<typeof this.parameters>): Promise<WebSearchToolResult> {
     const { query, maxResults = 5 } = params;
@@ -88,7 +88,7 @@ export class WebSearchTool implements Tool<any, WebSearchToolResult> {
       return toolResult;
     } catch (error) {
       this.logger.error(`❌ Web search failed for "${query}": ${error.message}`);
-      
+
       // Return error in a structured way
       throw new Error(
         `Failed to search the web for "${query}". ` +
