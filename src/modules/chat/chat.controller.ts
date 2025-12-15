@@ -19,7 +19,6 @@ import { ChatRequestDto } from './dto/chat-request.dto';
 import type { UIMessage } from 'ai';
 import { UpdateSystemPromptDto } from './dto/update-system-prompt.dto';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
-import { UpdateOperationalModeDto } from './dto/update-operational-mode.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
@@ -126,19 +125,6 @@ export class ChatController {
       conversationId,
       req.user.userId,
       body.systemPrompt,
-    );
-  }
-
-  @Put('conversations/:id/operational-mode')
-  async updateConversationMode(
-    @Req() req,
-    @Param('id') conversationId: string,
-    @Body() dto: UpdateOperationalModeDto,
-  ) {
-    return this.chatService.updateConversationMode(
-      conversationId,
-      req.user.userId,
-      dto.mode,
     );
   }
 }
