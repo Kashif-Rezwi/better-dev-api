@@ -117,7 +117,7 @@ export class ChatService {
       uiMessages.push({
         id: msg.id,
         role: msg.role as 'user' | 'assistant' | 'system',
-        parts: [{ type: 'text', text: contentText }],
+        parts: [{ type: 'text', text: contentText || '' }],
       });
     });
 
@@ -354,7 +354,7 @@ export class ChatService {
           ? new MessageResponseDto({
             id: lastMessage.id,
             role: lastMessage.role,
-            content: lastMessage.content.substring(0, 100),
+            content: (lastMessage.content || '').substring(0, 100),
             createdAt: lastMessage.createdAt,
           })
           : undefined,

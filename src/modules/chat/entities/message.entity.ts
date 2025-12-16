@@ -35,8 +35,8 @@ export class Message {
   })
   role: MessageRole;
 
-  @Column('text')
-  content: string;
+  @Column('text', { nullable: true })
+  content?: string;
 
   @Column('jsonb', { nullable: true })
   metadata?: MessageMetadata;
