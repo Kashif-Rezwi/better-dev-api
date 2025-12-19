@@ -22,6 +22,7 @@ import { MODE_CONFIG } from './modes/mode.config';
 import type { OperationalMode } from './modes/mode.config';
 import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
 import { MessageUtils } from './utils/message.utils';
+import { MAX_TOOL_ITERATIONS, CONTENT_PREVIEW_LENGTH } from './constants/chat.constants';
 
 @Injectable()
 export class ChatService {
@@ -68,6 +69,17 @@ export class ChatService {
 
     // Add messages with tool results included in text
     conversation.messages.forEach((msg) => {
+      // 1. Prefer the native 'parts' array if it exists (Multi-modal support)
+      if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+        uiMessages.push({
+          id: msg.id,
+          role: msg.role as 'user' | 'assistant' | 'system',
+          parts: msg.parts as any, // Cast for UI compatibility
+        });
+        return;
+      }
+
+      // 2. Fallback to legacy content processing (Text-only)
       let contentText = msg.content;
 
       // Append tool results to the text content if they exist
@@ -140,50 +152,13 @@ export class ChatService {
       conversationId,
       role: message.role as MessageRole,
       content,
+      parts: message.parts as any, // Cast for compatibility between UIMessagePart and MessagePart
     });
 
     return this.messageRepository.save(dbMessage);
   }
 
-  // Save the assistant's response after streaming completes
-  async saveAssistantResponse(
-    conversationId: string,
-    responseMessage: UIMessage,
-  ): Promise<void> {
-    const content = this.extractTextFromUIMessage(responseMessage);
 
-    // EXTRACT TOOL CALL DATA FROM MESSAGE PARTS
-    const toolCalls: ToolCallMetadata[] = [];
-
-    responseMessage.parts.forEach((part) => {
-      // Check for tool call parts
-      if (part.type?.startsWith('tool-') || part.type === 'dynamic-tool') {
-        toolCalls.push({
-          type: part.type,
-          toolName: (part as any).toolName || part.type.replace('tool-', ''),
-          state: (part as any).state,
-          output: (part as any).output,
-          input: (part as any).input,
-          toolCallId: (part as any).toolCallId,
-        });
-      }
-    });
-
-    // Create message with metadata
-    const dbMessage = this.messageRepository.create({
-      conversationId,
-      role: responseMessage.role as MessageRole,
-      content,
-      metadata: toolCalls.length > 0 ? { toolCalls } : undefined,
-    });
-
-    await this.messageRepository.save(dbMessage);
-
-    // Update conversation timestamp
-    await this.conversationRepository.update(conversationId, {
-      updatedAt: new Date(),
-    });
-  }
 
   // Complete streaming flow with proper error handling and transaction safety
   async handleStreamingResponse(
@@ -241,21 +216,27 @@ export class ChatService {
       // Get mode configuration for metadata
       const modeConfig = MODE_CONFIG[effective];
 
+      // Convert messages to AI SDK format (parts → content) using centralized utility
+      const formattedMessages = MessageUtils.toAISDKFormatAll(historyMessages);
+
       // Get StreamText result with MODE-AWARE streaming
-      const result = this.aiService.streamResponseWithMode(
-        historyMessages,
+      const { stream: result, modelUsed: actualModel, effectiveMode: actualEffectiveMode } = this.aiService.streamResponseWithMode(
+        formattedMessages,
         effective,
         conversation.systemPrompt,
         tools,
-        5 // Max 5 tool call iterations
+        MAX_TOOL_ITERATIONS
       );
+
+      // Re-fetch mode config based on the ACTUAL effective mode used (in case it switched to vision)
+      const finalModeConfig = MODE_CONFIG[actualEffectiveMode];
 
       // Prepare metadata structure for streaming and database save
       const baseMetadata = {
         operationalMode: requested,
-        effectiveMode: effective,
-        modelUsed: modeConfig.model,
-        temperature: modeConfig.temperature,
+        effectiveMode: actualEffectiveMode,
+        modelUsed: actualModel, // Use the actual model (Vision model if images present)
+        temperature: finalModeConfig.temperature,
         tokensUsed: undefined, // Future: Extract from AI response
       };
 
@@ -354,7 +335,7 @@ export class ChatService {
           ? new MessageResponseDto({
             id: lastMessage.id,
             role: lastMessage.role,
-            content: (lastMessage.content || '').substring(0, 100),
+            content: (lastMessage.content || '').substring(0, CONTENT_PREVIEW_LENGTH),
             createdAt: lastMessage.createdAt,
           })
           : undefined,
@@ -385,6 +366,7 @@ export class ChatService {
             id: msg.id,
             role: msg.role,
             content: msg.content,
+            parts: msg.parts,
             createdAt: msg.createdAt,
             metadata: msg.metadata,
           }),
@@ -482,6 +464,7 @@ export class ChatService {
       conversationId,
       role: responseMessage.role as MessageRole,
       content,
+      parts: responseMessage.parts as any, // Cast for compatibility between UIMessagePart and MessagePart
       metadata,
     });
 
@@ -549,10 +532,14 @@ export class ChatService {
       const savedConversation = await this.conversationRepository.save(conversation);
 
       // 2. Create and save user message
+      // Construct parts: use provided parts or fallback to text part from firstMessage
+      const parts = dto.parts || [{ type: 'text', text: dto.firstMessage }];
+
       const userMessage = this.messageRepository.create({
         conversationId: savedConversation.id,
         role: MessageRole.USER,
         content: dto.firstMessage,
+        parts: parts as any, // Cast for compatibility
       });
 
       await this.messageRepository.save(userMessage);

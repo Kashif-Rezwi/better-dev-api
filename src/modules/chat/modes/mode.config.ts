@@ -2,7 +2,7 @@
  * Operational Mode Types
  */
 export type OperationalMode = 'fast' | 'thinking' | 'auto';
-export type EffectiveMode = 'fast' | 'thinking';
+export type EffectiveMode = 'fast' | 'thinking' | 'vision';
 
 /**
  * Mode Configuration
@@ -51,5 +51,21 @@ CRITICAL INSTRUCTIONS:
 - Prioritize accuracy and depth over brevity
 
 Your goal is to demonstrate deep understanding and provide complete, well-reasoned answers.`,
+    },
+
+    vision: {
+        model: process.env.AI_VISION_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct',
+        maxTokens: 2000,
+        temperature: 0.6,
+        systemPrompt: `You are operating in VISION MODE.
+
+CRITICAL INSTRUCTIONS:
+- Focus on analyzing the provided images in detail
+- Describe visual elements, text, and context present in the image
+- Be precise with OCR (Optical Character Recognition) tasks
+- Answer specific questions about the image content accuracy
+- Combine visual analysis with reasoning
+
+Your goal is to be the user's eyes, providing accurate and helpful insights based on the visual data.`,
     },
 } as const;

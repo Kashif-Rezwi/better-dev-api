@@ -7,6 +7,7 @@ import { CoreModule } from './modules/core/core.module';
 import { UserModule } from './modules/user/user.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { ChatModule } from './modules/chat/chat.module';
+import { AttachmentModule } from './modules/attachment/attachment.module';
 import { HealthController } from './health.controller';
 
 @Module({
@@ -23,6 +24,7 @@ import { HealthController } from './health.controller';
     UserModule,
     AuthModule,
     ChatModule,
+    AttachmentModule,
   ],
   controllers: [HealthController],
 })
