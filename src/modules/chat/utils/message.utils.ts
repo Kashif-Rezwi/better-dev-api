@@ -27,11 +27,6 @@ export class MessageUtils {
      * @returns Extracted text content
      */
     static extractText(message: FlexibleMessage): string {
-        // Handle legacy format with content string
-        if ('content' in message && typeof message.content === 'string') {
-            return message.content;
-        }
-
         // Handle standard format with parts array
         if ('parts' in message && Array.isArray(message.parts)) {
             return message.parts
@@ -40,6 +35,11 @@ export class MessageUtils {
                 )
                 .map((part) => part.text)
                 .join('');
+        }
+
+        // Handle legacy format with content string
+        if ('content' in message && typeof message.content === 'string') {
+            return message.content;
         }
 
         return '';
@@ -126,5 +126,58 @@ export class MessageUtils {
             }
         }
         return undefined;
+    }
+
+    /**
+     * Convert UIMessage to AI SDK format (parts → content)
+     * Transforms the parts array into the format expected by AI providers
+     * @param message - Message with parts array
+     * @returns Message with content array
+     */
+    static toAISDKFormat(message: UIMessage): any {
+        if (!message.parts || !Array.isArray(message.parts) || message.parts.length === 0) {
+            return message;
+        }
+
+        const { parts, ...rest } = message;
+
+        const content = parts.map((part: any) => {
+            // Text part
+            if (part.type === 'text') {
+                return {
+                    type: 'text',
+                    text: part.text || ''
+                };
+            }
+
+            // Image part - handle both URL and base64
+            if (part.type === 'image') {
+                const imageData = part.image || part.url;
+                if (!imageData) {
+                    throw new Error('Image part missing image data');
+                }
+                return {
+                    type: 'image',
+                    image: imageData
+                };
+            }
+
+            // For other part types, pass through as-is
+            return part;
+        });
+
+        return {
+            ...rest,
+            content
+        };
+    }
+
+    /**
+     * Batch convert multiple UIMessages to AI SDK format
+     * @param messages - Array of UIMessages
+     * @returns Array of messages in AI SDK format
+     */
+    static toAISDKFormatAll(messages: UIMessage[]): any[] {
+        return messages.map(msg => this.toAISDKFormat(msg));
     }
 }
