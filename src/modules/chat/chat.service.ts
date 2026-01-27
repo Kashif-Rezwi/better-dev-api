@@ -71,10 +71,36 @@ export class ChatService {
     conversation.messages.forEach((msg) => {
       // 1. Prefer the native 'parts' array if it exists (Multi-modal support)
       if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
+        const processedParts = msg.parts.map((part: any) => {
+          // If it's a file part, check its status and append extracted text
+          if (part.type === 'file' && part.attachmentId) {
+            const attachment = msg.attachments?.find((a: any) => a.id === part.attachmentId);
+            if (attachment) {
+              if (attachment.extractionStatus === 'SUCCESS' && attachment.extractedText) {
+                // TRUNCATION FIX: Limit to 10k chars to prevent context window overflow
+                const truncatedText = attachment.extractedText.length > 10000 
+                  ? attachment.extractedText.substring(0, 10000) + '... [Text Truncated]' 
+                  : attachment.extractedText;
+                
+                return {
+                  ...part,
+                  text: `\n\n[File Content: ${attachment.fileName}]:\n${truncatedText}`
+                };
+              } else if (attachment.extractionStatus === 'PROCESSING') {
+                return {
+                  ...part,
+                  text: `\n\n[System: I am currently reading the file "${attachment.fileName}". Please wait a moment if you want to ask questions about its content.]`
+                };
+              }
+            }
+          }
+          return part;
+        });
+
         uiMessages.push({
           id: msg.id,
           role: msg.role as 'user' | 'assistant' | 'system',
-          parts: msg.parts as any, // Cast for UI compatibility
+          parts: processedParts as any,
         });
         return;
       }
