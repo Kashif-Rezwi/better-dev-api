@@ -18,7 +18,9 @@ curl -X POST "$API_URL/attachment/upload" \
 # 2. Immediately try to hit the health check
 echo "⏱️ Step 2: Attempting to hit /health immediately after..."
 start_time=$(date +%s)
-curl -s "$API_URL/health" | JSON_PP
+# Using curl -s and removing | JSON_PP to ensure it works even if tool is missing
+response=$(curl -s "$API_URL/health")
+echo "Response: $response"
 end_time=$(date +%s)
 
 duration=$((end_time - start_time))

@@ -18,6 +18,7 @@ import { UIMessage } from 'ai';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
 import { ToolRegistry } from './tools/tool.registry';
 import { ModeResolverService } from './modes/mode-resolver.service';
+import { ConfigService } from '@nestjs/config';
 import { MODE_CONFIG } from './modes/mode.config';
 import type { OperationalMode } from './modes/mode.config';
 import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
@@ -36,6 +37,7 @@ export class ChatService {
     private aiService: AIService,
     private toolRegistry: ToolRegistry,
     private modeResolver: ModeResolverService,
+    private configService: ConfigService,
   ) { }
 
   // Convert database messages to UIMessage format for AI SDK
@@ -77,9 +79,13 @@ export class ChatService {
             const attachment = msg.attachments?.find((a: any) => a.id === part.attachmentId);
             if (attachment) {
               if (attachment.extractionStatus === 'SUCCESS' && attachment.extractedText) {
-                // TRUNCATION FIX: Limit to 10k chars to prevent context window overflow
-                const truncatedText = attachment.extractedText.length > 10000 
-                  ? attachment.extractedText.substring(0, 10000) + '... [Text Truncated]' 
+                // Use dynamic token limit from config (converted to characters)
+                const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
+                const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
+                const maxDocChars = maxDocTokens * charsPerToken;
+                
+                const truncatedText = attachment.extractedText.length > maxDocChars 
+                  ? attachment.extractedText.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens. Transition to RAG recommended for full access.]` 
                   : attachment.extractedText;
                 
                 return {
@@ -208,6 +214,16 @@ export class ChatService {
 
       // Get conversation history
       const historyMessages = await this.getUIMessages(conversationId);
+
+      // Check for total context size
+      const totalChars = historyMessages.reduce((sum, msg) => sum + MessageUtils.extractText(msg).length, 0);
+      const maxTotalTokens = this.configService.get<number>('tokenLimits.maxTotalContextTokens') || 64000;
+      const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
+      const maxTotalChars = maxTotalTokens * charsPerToken;
+      
+      if (totalChars > maxTotalChars) {
+        this.logger.warn(`Conversation ${conversationId} context size (~${Math.round(totalChars / charsPerToken)} tokens) exceeds safe limit (${maxTotalTokens} tokens). Accuracy may decrease.`);
+      }
 
       // Check for duplicate message
       const lastUserMessageText = this.extractTextFromUIMessage(lastUserMessage);

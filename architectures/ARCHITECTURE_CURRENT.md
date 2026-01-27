@@ -25,15 +25,17 @@ The API has evolved into a **Multi-Modal AI Engine**. It uses a sophisticated me
     - **Images:** Uses **Tesseract.js** for OCR and **Sharp** for thumbnailing.
     - **PDFs:** Uses **pdf-parse** to extract text.
     - **Documents:** Uses **mammoth** to convert Word docs to text.
-- **`attachment.service.ts`**: Coordinates uploads and triggers the processing pipeline.
+- **`attachment.service.ts`**: Coordinates uploads, enforces file size limits, and triggers the processing pipeline.
 
 ### 2. Multi-Part Chat System (`src/modules/chat`)
 *Handling complex conversations.*
 
 - **`message.entity.ts`**: Now features a `parts` (JSONB) column. Each part has a `type` (text, image, file, tool-call, etc.).
+- **`token-limits.config.ts`**: Centralized thresholds for context windows (e.g., 32k tokens per doc, 64k total context).
 - **`message.utils.ts`**: Normalizes input from the frontend and formats it for the AI SDK v5.
 - **`chat.service.ts`**:
     - Aggregates text from both message content and `extractedText` from attachments.
+    - Implements **Threshold-Based Truncation**: Automatically cuts off text exceeding token limits to ensure LLM stability.
     - Manages the persistence of complex multi-part histories.
 
 ### 3. Core AI & Vision (`src/modules/core`)
@@ -102,6 +104,7 @@ graph TD
 
 ## 🛠️ Key Architectural Patterns
 
+- **Threshold Strategy:** Enforces token-based limits (32k/64k) to maintain performance before transitioning to RAG.
 - **Multi-Part Serialization:** Allows for future-proof support of audio, video, and other modalities.
 - **Asynchronous Extraction:** Offloads heavy PDF/OCR tasks from the main request thread.
 - **Strategy Pattern:** Dynamically selects models based on the detected content type (Text vs. Vision).
