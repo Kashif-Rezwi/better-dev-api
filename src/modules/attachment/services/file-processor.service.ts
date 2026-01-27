@@ -1,6 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { createWorker } from 'tesseract.js';
-import pdfParse from 'pdf-parse';
 import * as mammoth from 'mammoth';
 import sharp from 'sharp';
 import { FileType } from '../entities/attachment.entity';
@@ -12,9 +11,17 @@ export interface ProcessedFile {
 }
 
 @Injectable()
-export class FileProcessorService {
+export class FileProcessorService implements OnModuleDestroy {
     private readonly logger = new Logger(FileProcessorService.name);
     private worker: any = null;
+
+    async onModuleDestroy() {
+        if (this.worker) {
+            this.logger.log('Terminating Tesseract Worker...');
+            await this.worker.terminate();
+            this.worker = null;
+        }
+    }
 
     private async getWorker() {
         if (!this.worker) {
@@ -87,19 +94,24 @@ export class FileProcessorService {
     }
 
     private async processPDF(buffer: Buffer): Promise<ProcessedFile> {
-        // @ts-ignore - pdf-parse doesn't have proper ES6 module types
-        const pdfParseModule = require('pdf-parse');
-        const data = await pdfParseModule(buffer);
+        try {
+            // pdf-parse version 1.1.1 usage
+            const pdf = require('pdf-parse');
+            const data = await pdf(buffer);
 
-        this.logger.log(`PDF processed: ${data.numpages} pages, ${data.text.length} characters`);
+            this.logger.log(`PDF processed: ${data.numpages} pages, ${data.text.length} characters`);
 
-        return {
-            extractedText: data.text,
-            metadata: {
-                pages: data.numpages,
-                info: data.info,
-            },
-        };
+            return {
+                extractedText: data.text || '',
+                metadata: {
+                    pages: data.numpages || 0,
+                    info: data.info || {},
+                },
+            };
+        } catch (error: any) {
+            this.logger.error(`PDF extraction failed: ${error.message}`);
+            throw error;
+        }
     }
 
     private async processDocument(
