@@ -10,6 +10,7 @@ import { Repository } from 'typeorm';
 import { Attachment, FileType, ExtractionStatus } from './entities/attachment.entity';
 import { StorageService } from './services/storage.service';
 import { FileProcessorService } from './services/file-processor.service';
+import { ConfigService } from '@nestjs/config';
 import * as mime from 'mime-types';
 
 @Injectable()
@@ -21,6 +22,7 @@ export class AttachmentService {
         private attachmentRepository: Repository<Attachment>,
         private storageService: StorageService,
         private fileProcessorService: FileProcessorService,
+        private configService: ConfigService,
     ) { }
 
     async upload(
@@ -32,6 +34,14 @@ export class AttachmentService {
         this.logger.log(
             `Uploading file: ${file.originalname} (${file.size} bytes) for conversation ${conversationId}`,
         );
+
+        // Check file size limit
+        const maxSize = this.configService.get<number>('tokenLimits.maxUploadSizeBytes') || 10485760;
+        if (file.size > maxSize) {
+            throw new BadRequestException(
+                `File size exceeds the limit of ${Math.round(maxSize / 1024 / 1024)}MB`,
+            );
+        }
 
         // Determine file type
         const fileType = this.determineFileType(file.mimetype);
