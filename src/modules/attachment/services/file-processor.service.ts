@@ -14,6 +14,15 @@ export interface ProcessedFile {
 @Injectable()
 export class FileProcessorService {
     private readonly logger = new Logger(FileProcessorService.name);
+    private worker: any = null;
+
+    private async getWorker() {
+        if (!this.worker) {
+            this.worker = await createWorker('eng');
+            this.logger.log('Tesseract Worker initialized');
+        }
+        return this.worker;
+    }
 
     async process(
         buffer: Buffer,
@@ -56,9 +65,8 @@ export class FileProcessorService {
         let ocrMetadata: any = {};
 
         try {
-            const worker = await createWorker('eng');
+            const worker = await this.getWorker();
             const { data } = await worker.recognize(buffer);
-            await worker.terminate();
 
             extractedText = data.text;
             ocrMetadata = {
