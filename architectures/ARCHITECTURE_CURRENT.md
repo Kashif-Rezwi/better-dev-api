@@ -1,17 +1,19 @@
 # Better Dev API - Multi-Modal Architecture (Current)
 
-This document describes the modern, multi-modal architecture of the Better Dev API, which supports text, images, and documents (PDFs, Docx).
+This document describes the modern, multi-modal architecture of the Better Dev API, which supports text, images, and documents (PDFs, Docx) with optimized data flow and resource management.
 
 ## 🏗️ High-Level Design (HLD)
 
-The API has evolved into a **Multi-Modal AI Engine**. It uses a sophisticated message-part system and an asynchronous file processing pipeline.
+The API operates as a **Multi-Modal AI Engine**. It uses a sophisticated message-part system, an asynchronous file processing pipeline, and dynamic model routing.
 
 ### System Components
 
-- **Attachment Module:** Handles file uploads, multi-backend storage (S3/Local), and content extraction (OCR/PDF Parsing).
-- **Multi-Part Message System:** Replaces simple text with a `parts` array, allowing mixed media in a single message.
-- **Vision Intelligence:** Automatically detects images and switches to vision-capable models (e.g., Llama 4 Scout).
-- **Asynchronous Processing:** Extracts text from non-image files in the background and injects it into the AI context.
+- **Attachment Module:** Handles file uploads, multi-backend storage (S3/Local), and content extraction (OCR/PDF Parsing) with managed worker lifecycles.
+- **Multi-Part Message System:** Replaces simple text with a `parts` array, allowing mixed media (Text + Images + Files) in a single message.
+- **Dynamic Mode Routing:** 
+    - **Fast/Thinking:** User-selected modes for text/reasoning.
+    - **Vision:** Auto-detected mode when images are present, routing to visual models (e.g., Llama 4 Scout).
+- **Context Injection (RAG-Light):** Extracts text from documents and injects it directly into the context window, with intelligent truncation.
 
 ---
 
@@ -20,31 +22,36 @@ The API has evolved into a **Multi-Modal AI Engine**. It uses a sophisticated me
 ### 1. Attachment Module (`src/modules/attachment`)
 *The gateway for all visual and document-based data.*
 
-- **`storage.service.ts`**: Abstracts storage logic. Can use **DigitalOcean Spaces (S3)** for production or **Local Storage** for development.
-- **`file-processor.service.ts`**: The "Parser".
+- **`storage.service.ts`**: Abstracts storage logic (S3/Local).
+- **`file-processor.service.ts`**: The "Parser" & "OCR Engine".
+    - **Lifecycle Management:** Implements `OnModuleDestroy` to gracefully terminate Tesseract workers, preventing memory leaks.
     - **Images:** Uses **Tesseract.js** for OCR and **Sharp** for thumbnailing.
-    - **PDFs:** Uses **pdf-parse** to extract text.
+    - **PDFs:** Uses **pdf-parse** (v1.1.1) to extract text.
     - **Documents:** Uses **mammoth** to convert Word docs to text.
-- **`attachment.service.ts`**: Coordinates uploads, enforces file size limits, and triggers the processing pipeline.
+- **`attachment.service.ts`**: Coordinates uploads, enforces file size limits, and triggers the async processing pipeline.
 
 ### 2. Multi-Part Chat System (`src/modules/chat`)
-*Handling complex conversations.*
+*Handling complex conversations efficiently.*
 
-- **`message.entity.ts`**: Now features a `parts` (JSONB) column. Each part has a `type` (text, image, file, tool-call, etc.).
-- **`token-limits.config.ts`**: Centralized thresholds for context windows (e.g., 32k tokens per doc, 64k total context).
-- **`message.utils.ts`**: Normalizes input from the frontend and formats it for the AI SDK v5.
-- **`chat.service.ts`**:
-    - Aggregates text from both message content and `extractedText` from attachments.
-    - Implements **Threshold-Based Truncation**: Automatically cuts off text exceeding token limits to ensure LLM stability.
-    - Manages the persistence of complex multi-part histories.
+- **`chat.service.ts`**: The central orchestrator.
+    - **Optimized Data Flow:** Fetches conversation history **only once** per request to reduce DB load (50% read reduction).
+    - **Efficient Validation:** Uses lightweight queries for ownership and duplicate checks.
+    - **Context Management:** Aggregates text from messages and attachment `extractedText`.
+    - **Truncation:** Automatically cuts off document text exceeding ~32k tokens to ensure LLM stability.
+- **`message.entity.ts`**: Uses `parts` (JSONB) to store mixed modalities.
+- **`mode-resolver.service.ts`**: Determines the *Operational Mode* (Fast/Thinking/Auto) based on user preference or complexity analysis.
 
 ### 3. Core AI & Vision (`src/modules/core`)
 *The intelligence layer.*
 
 - **`ai.service.ts`**: 
-    - **Vision Detection**: Automatically checks if `parts` contain images.
-    - **Auto-Switching**: If images are found, it switches the `effectiveMode` to `vision`.
-    - **Model Selection**: Uses `llama-4-scout-17b-16e-instruct` for vision and `llama-3.1-8b` for standard text.
+    - **Single Streaming Entrypoint:** `streamResponseWithMode` handles all interaction types.
+    - **Vision Detection:** Scans message parts for image data (Base64/URL).
+    - **Effective Mode Switching:** If images are found, overrides the requested mode to `vision`.
+    - **Model Selection:**
+        - **Vision:** `meta-llama/llama-4-scout-17b-16e-instruct`
+        - **Tools/Thinking:** `llama-3.3-70b-versatile`
+        - **Fast/Text:** `llama-3.1-8b-instant`
 
 ---
 
@@ -54,42 +61,41 @@ The API has evolved into a **Multi-Modal AI Engine**. It uses a sophisticated me
 graph TD
     subgraph Client
         Upload["Upload File to /attachment/upload"]
-        ChatReq["POST /chat/messages with attachmentId"]
+        ChatReq["POST /chat/messages (with attachmentId/images)"]
     end
 
-    subgraph Attachment_Processing
-        Store["StorageService: Save to S3/Local"]
-        Process["FileProcessor: OCR/PDF Extraction"]
-        UpdateDB["Update Attachment: extractionStatus SUCCESS"]
+    subgraph Attachment_Pipeline
+        Store["StorageService: Save File"]
+        Process["FileProcessor: Extract Text / OCR"]
+        Worker["Tesseract Worker (Managed Lifecycle)"]
+        UpdateDB["Update Attachment: extractionStatus"]
     end
 
     subgraph Chat_Orchestration
-        Normalize["MessageUtils: Normalize to Parts"]
+        Verify["ChatService: Verify Ownership (Lightweight)"]
+        Fetch["ChatService: Fetch History (Single Query)"]
         Context["Inject extractedText from Attachments"]
+        Resolve["ModeResolver: Determine Operational Mode"]
+    end
+
+    subgraph AI_Core
         Detect["AIService: Detect Image Content"]
-        ModeCheck{"Image Present?"}
+        Switch{"Image Present?"}
+        Vision["Effective Mode: VISION"]
+        Text["Effective Mode: FAST/THINKING"]
+        Stream["AI SDK: Stream Text & Metadata"]
     end
 
-    subgraph AI_Execution
-        VisionMode["Switch to Vision Model"]
-        TextMode["Use Fast/Thinking Model"]
-        Stream["AI SDK: StreamResponse"]
-    end
-
-    Upload --> Store
-    Store --> Process
-    Process --> UpdateDB
+    Upload --> Store --> Process --> Worker --> UpdateDB
     
-    ChatReq --> Normalize
-    Normalize --> Context
-    Context --> Detect
-    Detect --> ModeCheck
+    ChatReq --> Verify --> Fetch --> Context --> Resolve --> Detect
     
-    ModeCheck -- YES --> VisionMode
-    ModeCheck -- NO --> TextMode
+    Detect --> Switch
+    Switch -- YES --> Vision
+    Switch -- NO --> Text
     
-    VisionMode --> Stream
-    TextMode --> Stream
+    Vision --> Stream
+    Text --> Stream
 ```
 
 ---
@@ -98,14 +104,21 @@ graph TD
 
 - **Conversation** (1 : N) **Message**
 - **Message** (1 : N) **Attachment**
-- **Message** (JSONB) **parts**: `[{ type: 'text', text: '...' }, { type: 'image', url: '...' }, { type: 'file', attachmentId: '...' }]`
+- **Message** (JSONB) **parts**: 
+  ```json
+  [
+    { "type": "text", "text": "Analyze this..." }, 
+    { "type": "image", "image": "data:image/..." }, 
+    { "type": "file", "attachmentId": "uuid..." }
+  ]
+  ```
 
 ---
 
 ## 🛠️ Key Architectural Patterns
 
-- **Threshold Strategy:** Enforces token-based limits (32k/64k) to maintain performance before transitioning to RAG.
-- **Multi-Part Serialization:** Allows for future-proof support of audio, video, and other modalities.
-- **Asynchronous Extraction:** Offloads heavy PDF/OCR tasks from the main request thread.
-- **Strategy Pattern:** Dynamically selects models based on the detected content type (Text vs. Vision).
-- **Service-Based Storage:** Decouples the API from specific storage providers.
+- **Optimized Read-Path:** Single-query history loading prevents "N+1" style redundant fetches during the request lifecycle.
+- **Effective Mode Pattern:** Separation of "Requested Mode" (User intent) and "Effective Mode" (System requirement, e.g., Vision).
+- **Worker Lifecycle Management:** Explicit termination of resource-heavy workers (OCR) on application shutdown.
+- **Threshold Strategy:** Enforces token-based limits (32k/64k) to maintain performance before transitioning to full RAG.
+- **Multi-Part Serialization:** Native support for mixed media messages in database and API contracts.
