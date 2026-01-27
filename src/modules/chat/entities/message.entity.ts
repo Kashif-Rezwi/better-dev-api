@@ -82,8 +82,7 @@ export class Message {
   @Column('jsonb', { nullable: true })
   parts?: MessagePart[];
 
-  @OneToMany(() => require('../../attachment/entities/attachment.entity').Attachment,
-    (attachment: any) => attachment.message)
+  @OneToMany('Attachment', 'message')
   attachments?: any[];
 
   @CreateDateColumn()

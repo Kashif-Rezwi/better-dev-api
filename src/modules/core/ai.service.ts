@@ -185,34 +185,56 @@ Reply with ONLY "YES" or "NO".`
         : modePrompt;
 
       // Inject system prompt as first message
-      const messagesWithSystem = [
+      const messagesWithSystem: UIMessage[] = [
         {
-          role: 'system',
-          content: finalSystemPrompt,
           id: 'system-prompt',
-        } as any,
+          role: 'system',
+          parts: [{ type: 'text', text: finalSystemPrompt }],
+        },
         ...messages,
       ];
 
-      let modelMessages: any[];
+      // Convert all messages to AI SDK format (sanitizes parts for the provider)
+      // This handles custom part types like 'file' by converting them to 'text'
+      const formattedMessages = MessageUtils.toAISDKFormatAll(messagesWithSystem);
 
-      // Check if messages effectively already have content (from our ChatService fix)
-      // We check the last message or any user message to see if it uses 'content' instead of 'parts'
-      const isAlreadyFormatted = messages.some(m => (m as any).content && Array.isArray((m as any).content));
+      // DEBUG: Log formatted messages
+      this.logger.log(`[DEBUG] Formatted messages (UIMessage format):`);
+      this.logger.log(JSON.stringify(formattedMessages, null, 2));
 
-      if (isAlreadyFormatted) {
-        // Use messages as-is (they are already CoreMessages), but sanitize to remove extra DB properties
-        modelMessages = messagesWithSystem.map(m => ({
-          role: m.role,
-          content: (m as any).content
-        }));
-      } else {
-        modelMessages = convertToModelMessages(messagesWithSystem);
-      }
+      // Convert to ModelMessage format for the AI provider
+      let modelMessages = convertToModelMessages(formattedMessages);
+
+      // FIX: Manually restore images in User messages because convertToModelMessages may strip them from 'parts'
+      // if it doesn't support them fully yet.
+      modelMessages = modelMessages.map((msg, index) => {
+        if (msg.role === 'user') {
+          const originalMsg = formattedMessages[index];
+          if (originalMsg && originalMsg.role === 'user' && originalMsg.parts) {
+            const hasImages = originalMsg.parts.some((p: any) => p.type === 'image');
+            if (hasImages) {
+              // Reconstruct content array manually to ensure images are preserved
+              return {
+                ...msg,
+                content: originalMsg.parts.map((p: any) => {
+                  if (p.type === 'image') {
+                    return { type: 'image', image: p.image };
+                  }
+                  if (p.type === 'text') {
+                    return { type: 'text', text: p.text };
+                  }
+                  return { type: 'text', text: '' }; // Fallback
+                }) as any
+              };
+            }
+          }
+        }
+        return msg;
+      });
 
       // DEBUG: Log the exact messages being sent to the AI model
-      this.logger.debug(`Sending ${modelMessages.length} messages to model ${modelToUse}`);
-      this.logger.debug(JSON.stringify(modelMessages, null, 2));
+      this.logger.log(`Sending ${modelMessages.length} messages to model ${modelToUse}`);
+      this.logger.log(JSON.stringify(modelMessages, null, 2));
 
       const hasTools = tools && Object.keys(tools).length > 0;
 

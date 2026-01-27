@@ -129,19 +129,16 @@ export class MessageUtils {
     }
 
     /**
-     * Convert UIMessage to AI SDK format (parts → content)
-     * Transforms the parts array into the format expected by AI providers
+     * Convert UIMessage to AI SDK format (sanitizes parts for the provider)
      * @param message - Message with parts array
-     * @returns Message with content array
+     * @returns Message with sanitized parts array
      */
-    static toAISDKFormat(message: UIMessage): any {
+    static toAISDKFormat(message: UIMessage): UIMessage {
         if (!message.parts || !Array.isArray(message.parts) || message.parts.length === 0) {
             return message;
         }
 
-        const { parts, ...rest } = message;
-
-        const content = parts.map((part: any) => {
+        const sanitizedParts = message.parts.map((part: any) => {
             // Text part
             if (part.type === 'text') {
                 return {
@@ -156,19 +153,49 @@ export class MessageUtils {
                 if (!imageData) {
                     throw new Error('Image part missing image data');
                 }
+
+                // If it's already a URL object, keep it
+                if (imageData instanceof URL) {
+                    return { type: 'image', image: imageData };
+                }
+
+                // If it's a string URL (web), convert to URL object
+                if (typeof imageData === 'string' && (imageData.startsWith('http://') || imageData.startsWith('https://'))) {
+                    return { type: 'image', image: new URL(imageData) };
+                }
+
+                // If it's a data URL string, pass it directly
+                if (typeof imageData === 'string' && imageData.startsWith('data:')) {
+                    return { type: 'image', image: imageData };
+                }
+
+                // If it's raw base64 (or a relative path that was missed), 
+                // we treat it as base64 if it doesn't look like a path
+                if (typeof imageData === 'string' && !imageData.startsWith('/')) {
+                    const mimeType = part.mimeType || 'image/jpeg';
+                    return { type: 'image', image: `data:${mimeType};base64,${imageData}` };
+                }
+
+                // If it's still a relative path here, something went wrong in resolveImageParts
+                // but we pass it anyway to avoid crashing, though the model will likely fail
+                return { type: 'image', image: imageData };
+            }
+
+            // File part - convert to text part for the model
+            if (part.type === 'file') {
                 return {
-                    type: 'image',
-                    image: imageData
+                    type: 'text',
+                    text: part.text || ''
                 };
             }
 
-            // For other part types, pass through as-is
+            // For other part types, pass through as-is if they are valid AI SDK parts
             return part;
         });
 
         return {
-            ...rest,
-            content
+            ...message,
+            parts: sanitizedParts as any
         };
     }
 

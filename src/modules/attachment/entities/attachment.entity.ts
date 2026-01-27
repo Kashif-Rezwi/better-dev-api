@@ -33,9 +33,9 @@ export class Attachment {
     @Column({ nullable: true })
     messageId?: string;
 
-    @ManyToOne(() => Message, { nullable: true, onDelete: 'CASCADE' })
+    @ManyToOne('Message', 'attachments', { nullable: true, onDelete: 'CASCADE' })
     @JoinColumn({ name: 'messageId' })
-    message?: Message;
+    message?: any;
 
     @Column()
     conversationId: string;

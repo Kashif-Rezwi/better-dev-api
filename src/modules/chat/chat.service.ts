@@ -20,6 +20,8 @@ import { ToolRegistry } from './tools/tool.registry';
 import { ModeResolverService } from './modes/mode-resolver.service';
 import { ConfigService } from '@nestjs/config';
 import { MODE_CONFIG } from './modes/mode.config';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 import type { OperationalMode } from './modes/mode.config';
 import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
 import { MessageUtils } from './utils/message.utils';
@@ -41,61 +43,77 @@ export class ChatService {
   ) { }
 
   // Convert database messages to UIMessage format for AI SDK
-  private async getUIMessages(conversationId: string): Promise<UIMessage[]> {
-    // Single query with relation and ordering
-    const conversation = await this.conversationRepository.findOne({
+  private async getUIMessages(conversationId: string, conversation?: Conversation): Promise<UIMessage[]> {
+    // 1. Fetch messages
+    const messages = await this.messageRepository.find({
+      where: { conversationId },
+      order: { createdAt: 'ASC' },
+    });
+
+    // 2. Fetch all attachments for this conversation
+    // Use the metadata to find the entity name to avoid circular dependency issues
+    const attachments = await this.messageRepository.manager.createQueryBuilder()
+      .select('a')
+      .from('attachments', 'a')
+      .where('a.conversationId = :conversationId', { conversationId })
+      .getRawMany();
+
+    this.logger.debug(`[DEBUG] Pre-fetched ${attachments.length} attachments for conversation ${conversationId}`);
+    if (attachments.length > 0) {
+      this.logger.debug(`[DEBUG] First attachment ID: ${attachments[0].id}`);
+    }
+
+    // 3. Prepend system prompt if exists
+    const targetConversation = conversation || await this.conversationRepository.findOne({
       where: { id: conversationId },
-      relations: ['messages'],
-      order: {
-        messages: {
-          createdAt: 'ASC',
-        },
-      },
     });
 
     const uiMessages: UIMessage[] = [];
 
-    // Return empty if conversation not found
-    if (!conversation) {
-      return uiMessages;
-    }
-
-    // Prepend system prompt if exists
-    if (conversation.systemPrompt) {
+    if (targetConversation?.systemPrompt) {
       uiMessages.push({
         id: 'system',
         role: 'system',
-        parts: [{ type: 'text', text: conversation.systemPrompt }],
+        parts: [{ type: 'text', text: targetConversation.systemPrompt }],
       });
     }
 
-    // Add messages with tool results included in text
-    conversation.messages.forEach((msg) => {
-      // 1. Prefer the native 'parts' array if it exists (Multi-modal support)
+    // 4. Map messages to UIMessage format
+    messages.forEach((msg) => {
       if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
         const processedParts = msg.parts.map((part: any) => {
-          // If it's a file part, check its status and append extracted text
           if (part.type === 'file' && part.attachmentId) {
-            const attachment = msg.attachments?.find((a: any) => a.id === part.attachmentId);
-            if (attachment) {
-              if (attachment.extractionStatus === 'SUCCESS' && attachment.extractedText) {
-                // Use dynamic token limit from config (converted to characters)
+            // Find attachment in our pre-fetched list (case-insensitive and string-safe)
+            const attachment = attachments.find((a) => 
+              (a.id?.toString() || a.a_id?.toString()) === part.attachmentId.toString()
+            );
+            
+            // Map raw database columns (a_column_name) to attachment object properties if needed
+            const normalizedAttachment = attachment ? {
+              extractionStatus: attachment.extractionStatus || attachment.a_extractionStatus,
+              extractedText: attachment.extractedText || attachment.a_extractedText,
+              fileName: attachment.fileName || attachment.a_fileName,
+            } : null;
+
+            if (normalizedAttachment) {
+              if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
                 const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
                 const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
                 const maxDocChars = maxDocTokens * charsPerToken;
                 
-                const truncatedText = attachment.extractedText.length > maxDocChars 
-                  ? attachment.extractedText.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens. Transition to RAG recommended for full access.]` 
-                  : attachment.extractedText;
+                const text = normalizedAttachment.extractedText || '';
+                const truncatedText = text.length > maxDocChars 
+                  ? text.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens.]` 
+                  : text;
                 
                 return {
                   ...part,
-                  text: `\n\n[File Content: ${attachment.fileName}]:\n${truncatedText}`
+                  text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
                 };
-              } else if (attachment.extractionStatus === 'PROCESSING') {
+              } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
                 return {
                   ...part,
-                  text: `\n\n[System: I am currently reading the file "${attachment.fileName}". Please wait a moment if you want to ask questions about its content.]`
+                  text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
                 };
               }
             }
@@ -111,57 +129,11 @@ export class ChatService {
         return;
       }
 
-      // 2. Fallback to legacy content processing (Text-only)
-      let contentText = msg.content;
-
-      // Append tool results to the text content if they exist
-      if (msg.metadata && msg.metadata.toolCalls && Array.isArray(msg.metadata.toolCalls)) {
-        // Debug logging
-        this.logger.debug('[DEBUG] Found metadata.toolCalls: ' + JSON.stringify(msg.metadata.toolCalls, null, 2));
-
-        const toolResults = msg.metadata.toolCalls
-          // Filter for web search tools that have output
-          .filter((toolCall: ToolCallMetadata) =>
-            toolCall.toolName === 'tavily_web_search' && toolCall.output
-          )
-          .map((toolCall: ToolCallMetadata) => {
-            // TypeScript knows output exists due to filter above
-            const output = toolCall.output!;
-
-            this.logger.debug('[DEBUG] Processing web search output');
-            this.logger.debug('[DEBUG] Output structure: ' + Object.keys(output).join(', '));
-
-            // Format web search results as text
-            let toolText = '\n\n[Web Search Results]:\n';
-
-            if (output.summary) {
-              toolText += `Summary: ${output.summary}\n\n`;
-            }
-
-            if (output.results && Array.isArray(output.results)) {
-              toolText += `Sources:\n`;
-              output.results.forEach((result: any, index: number) => {
-                toolText += `${index + 1}. ${result.title}\n   ${result.url}\n   ${result.content}\n\n`;
-              });
-            }
-
-            this.logger.debug(`[DEBUG] Generated toolText length: ${toolText.length}`);
-            return toolText;
-          })
-          .join('\n');
-
-        if (toolResults) {
-          this.logger.debug(`[DEBUG] Adding tool results to content, length: ${toolResults.length}`);
-          contentText += toolResults;
-        } else {
-          this.logger.debug('[DEBUG] No web search results to add');
-        }
-      }
-
+      // Legacy fallback
       uiMessages.push({
         id: msg.id,
         role: msg.role as 'user' | 'assistant' | 'system',
-        parts: [{ type: 'text', text: contentText || '' }],
+        parts: [{ type: 'text', text: msg.content || '' }],
       });
     });
 
@@ -187,7 +159,29 @@ export class ChatService {
       parts: message.parts as any, // Cast for compatibility between UIMessagePart and MessagePart
     });
 
-    return this.messageRepository.save(dbMessage);
+    const savedMessage = await this.messageRepository.save(dbMessage);
+
+    // Link any attachments referenced in parts to this message
+    if (message.parts && Array.isArray(message.parts)) {
+      const attachmentIds = message.parts
+        .filter((part: any) => (part.type === 'file' || part.type === 'image') && part.attachmentId)
+        .map((part: any) => part.attachmentId);
+
+      if (attachmentIds.length > 0) {
+        // We need to import the repository here or use query builder
+        // For simplicity, let's use the connection/dataSource to update
+        await this.messageRepository.manager
+          .createQueryBuilder()
+          .update('attachments')
+          .set({ messageId: savedMessage.id })
+          .where('id IN (:...ids)', { ids: attachmentIds })
+          .execute();
+        
+        this.logger.debug(`Linked ${attachmentIds.length} attachments to message ${savedMessage.id}`);
+      }
+    }
+
+    return savedMessage;
   }
 
 
@@ -200,8 +194,8 @@ export class ChatService {
     modeOverride?: OperationalMode,
   ) {
     try {
-      // Verify ownership and load user for mode resolution
-      const conversation = await this.verifyOwnershipWithOrderedMessages(conversationId, userId);
+      // Verify ownership (lighter query than loading all messages)
+      const conversation = await this.verifyOwnership(conversationId, userId);
 
       // Get the last user message
       const inputMessage = messages[messages.length - 1];
@@ -212,8 +206,24 @@ export class ChatService {
       // Normalize message to ensure it complies with AI SDK (requires parts)
       const lastUserMessage = MessageUtils.normalize(inputMessage);
 
-      // Get conversation history
-      const historyMessages = await this.getUIMessages(conversationId);
+      // Check for duplicate message (check only last message in DB)
+      const lastUserMessageText = this.extractTextFromUIMessage(lastUserMessage);
+      
+      const lastDbMessage = await this.messageRepository.findOne({
+        where: { conversationId, role: MessageRole.USER },
+        order: { createdAt: 'DESC' },
+      });
+
+      const isDuplicate = lastDbMessage && lastDbMessage.content === lastUserMessageText;
+
+      // Save user message if not duplicate
+      if (!isDuplicate) {
+        await this.saveUIMessage(conversationId, lastUserMessage);
+      }
+
+      // Get complete conversation history (now with the last user message and attachments)
+      // Pass conversation object to avoid re-fetching
+      const historyMessages = await this.getUIMessages(conversationId, conversation);
 
       // Check for total context size
       const totalChars = historyMessages.reduce((sum, msg) => sum + MessageUtils.extractText(msg).length, 0);
@@ -223,20 +233,6 @@ export class ChatService {
       
       if (totalChars > maxTotalChars) {
         this.logger.warn(`Conversation ${conversationId} context size (~${Math.round(totalChars / charsPerToken)} tokens) exceeds safe limit (${maxTotalTokens} tokens). Accuracy may decrease.`);
-      }
-
-      // Check for duplicate message
-      const lastUserMessageText = this.extractTextFromUIMessage(lastUserMessage);
-      const lastHistoryMessage = historyMessages[historyMessages.length - 1];
-      const isDuplicate =
-        lastHistoryMessage &&
-        lastHistoryMessage.role === 'user' &&
-        this.extractTextFromUIMessage(lastHistoryMessage) === lastUserMessageText;
-
-      // Save user message if not duplicate
-      if (!isDuplicate) {
-        await this.saveUIMessage(conversationId, lastUserMessage);
-        historyMessages.push(lastUserMessage);
       }
 
       // === MODE RESOLUTION ===
@@ -258,12 +254,12 @@ export class ChatService {
       // Get mode configuration for metadata
       const modeConfig = MODE_CONFIG[effective];
 
-      // Convert messages to AI SDK format (parts → content) using centralized utility
-      const formattedMessages = MessageUtils.toAISDKFormatAll(historyMessages);
+      // Resolve local image URLs to Base64 for the AI provider
+      const resolvedHistory = await this.resolveImageParts(historyMessages);
 
       // Get StreamText result with MODE-AWARE streaming
       const { stream: result, modelUsed: actualModel, effectiveMode: actualEffectiveMode } = this.aiService.streamResponseWithMode(
-        formattedMessages,
+        resolvedHistory,
         effective,
         conversation.systemPrompt,
         tools,
@@ -318,6 +314,46 @@ export class ChatService {
   // Generate unique message ID
   private generateMessageId(): string {
     return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  // Resolve local image URLs to Base64 for the AI provider
+  private async resolveImageParts(messages: UIMessage[]): Promise<UIMessage[]> {
+    this.logger.log(`[DEBUG] resolveImageParts starting for ${messages.length} messages`);
+    const resolvedMessages = JSON.parse(JSON.stringify(messages));
+
+    for (const msg of resolvedMessages) {
+      if (msg.parts && Array.isArray(msg.parts)) {
+        for (let i = 0; i < msg.parts.length; i++) {
+          const part = msg.parts[i] as any;
+          this.logger.log(`[DEBUG] Checking part type: ${part.type}, url: ${part.url}, image: ${part.image}`);
+          // Check if it's an image part with a relative URL
+          if (part.type === 'image' && (part.url || part.image) && (part.url?.startsWith('/uploads/') || part.image?.startsWith('/uploads/'))) {
+            try {
+              const url = part.url || part.image;
+              const relativePath = url.replace('/uploads/', '');
+              const uploadsPath = this.configService.get<string>('LOCAL_STORAGE_PATH') || './uploads';
+              const filePath = path.join(process.cwd(), uploadsPath, relativePath);
+              
+              this.logger.log(`[DEBUG] Attempting to read file: ${filePath}`);
+              const buffer = await fs.readFile(filePath);
+              const mimeType = part.mimeType || 'image/jpeg';
+              const base64 = buffer.toString('base64');
+              
+              msg.parts[i] = {
+                type: 'image',
+                image: `data:${mimeType};base64,${base64}`,
+              } as any;
+              
+              this.logger.log(`[DEBUG] Successfully resolved local image to base64: ${filePath.substring(0, 50)}...`);
+            } catch (error) {
+              this.logger.error(`[DEBUG] Failed to resolve local image: ${error.message}`);
+            }
+          }
+        }
+      }
+    }
+
+    return resolvedMessages;
   }
 
   // Update system prompt
