@@ -87,36 +87,47 @@ export class ChatService {
     messages.forEach((msg) => {
       if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
         const processedParts = msg.parts.map((part: any) => {
-          if (part.type === 'file' && part.attachmentId) {
-            // O(1) Lookup using Map instead of O(N) .find()
+          // Handle both 'file' and 'image' parts that reference an attachmentId
+          if ((part.type === 'file' || part.type === 'image') && part.attachmentId) {
             const attachment = attachmentMap.get(part.attachmentId.toString());
             
-            // Map raw database columns (a_column_name) to attachment object properties if needed
-            const normalizedAttachment = attachment ? {
-              extractionStatus: attachment.extractionStatus || attachment.a_extractionStatus,
-              extractedText: attachment.extractedText || attachment.a_extractedText,
-              fileName: attachment.fileName || attachment.a_fileName,
-            } : null;
+            if (attachment) {
+              const normalizedAttachment = {
+                extractionStatus: attachment.extractionStatus || attachment.a_extractionStatus,
+                extractedText: attachment.extractedText || attachment.a_extractedText,
+                fileName: attachment.fileName || attachment.a_fileName,
+                storageUrl: attachment.storageUrl || attachment.a_storageUrl,
+              };
 
-            if (normalizedAttachment) {
-              if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
-                const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
-                const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
-                const maxDocChars = maxDocTokens * charsPerToken;
-                
-                const text = normalizedAttachment.extractedText || '';
-                const truncatedText = text.length > maxDocChars 
-                  ? text.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens.]` 
-                  : text;
-                
+              // For files: Inject extracted text context
+              if (part.type === 'file') {
+                if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
+                  const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
+                  const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
+                  const maxDocChars = maxDocTokens * charsPerToken;
+                  
+                  const text = normalizedAttachment.extractedText || '';
+                  const truncatedText = text.length > maxDocChars 
+                    ? text.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens.]` 
+                    : text;
+                  
+                  return {
+                    ...part,
+                    text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
+                  };
+                } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
+                  return {
+                    ...part,
+                    text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
+                  };
+                }
+              }
+
+              // For images: Ensure the URL is present so resolveImageParts can handle it
+              if (part.type === 'image' && !part.url && !part.image && normalizedAttachment.storageUrl) {
                 return {
                   ...part,
-                  text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
-                };
-              } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
-                return {
-                  ...part,
-                  text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
+                  url: normalizedAttachment.storageUrl,
                 };
               }
             }
