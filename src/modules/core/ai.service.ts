@@ -158,7 +158,7 @@ Reply with ONLY "YES" or "NO".`
     maxSteps: number = 5,
   ): { stream: ReturnType<typeof streamText>, modelUsed: string, effectiveMode: EffectiveMode } {
     try {
-      // Detect if messages contain images
+      // 1. Detect if messages contain images & determine EFFECTIVE mode
       const hasImages = this.hasImageContent(messages);
 
       // Determine the ACTUAL effective mode
@@ -170,21 +170,19 @@ Reply with ONLY "YES" or "NO".`
         this.logger.log(`🖼️  Images detected! Switching effective mode to: ${effectiveMode}`);
       }
 
-      // Get mode configuration based on the (potentially updated) effective mode
+      // 2. Get mode configuration
       const modeConfig = MODE_CONFIG[effectiveMode];
 
       // Use the model defined in the mode config
       // (Vision mode config will inherently point to the vision model)
       const modelToUse = modeConfig.model;
 
-      // Compose final system prompt (mode + user)
-      // If user provides custom prompt, append it to mode instructions
-      const modePrompt = modeConfig.systemPrompt;
+      // 3. Compose final system prompt
       const finalSystemPrompt = userSystemPrompt
-        ? `${modePrompt}\n\n---\nADDITIONAL CONTEXT (User-Defined Domain Expertise):\n${userSystemPrompt}\n\n---\nIMPORTANT: The operational mode instructions above take precedence over any conflicting behavioral guidance in the additional context. If there's a conflict between response style/verbosity, follow the mode instructions.`
-        : modePrompt;
+        ? `${modeConfig.systemPrompt}\n\n---\nADDITIONAL CONTEXT (User-Defined Domain Expertise):\n${userSystemPrompt}\n\n---\nIMPORTANT: The operational mode instructions above take precedence over any conflicting behavioral guidance in the additional context. If there's a conflict between response style/verbosity, follow the mode instructions.`
+        : modeConfig.systemPrompt;
 
-      // Inject system prompt as first message
+      // 4. Transform messages for the AI Provider
       const messagesWithSystem: UIMessage[] = [
         {
           id: 'system-prompt',
@@ -194,70 +192,46 @@ Reply with ONLY "YES" or "NO".`
         ...messages,
       ];
 
-      // Convert all messages to AI SDK format (sanitizes parts for the provider)
-      // This handles custom part types like 'file' by converting them to 'text'
-      const formattedMessages = MessageUtils.toAISDKFormatAll(messagesWithSystem);
+      // LIMIT IMAGES: Groq/Llama models typically support max 5 images.
+      // We keep images only for the last 3 user messages to stay within limits.
+      let imagesFound = 0;
+      const MAX_IMAGES = 5;
 
-      // DEBUG: Log formatted messages
-      this.logger.log(`[DEBUG] Formatted messages (UIMessage format):`);
-      this.logger.log(JSON.stringify(formattedMessages, null, 2));
+      const formattedMessages = MessageUtils.toAISDKFormatAll(
+        [...messagesWithSystem].reverse().map(msg => {
+          if (msg.role !== 'user' || !msg.parts?.some((p: any) => p.type === 'image')) return msg;
+          imagesFound++;
+          if (imagesFound <= MAX_IMAGES) return msg;
+          // Convert older images to text to save model context
+          return { ...msg, parts: msg.parts.map((p: any) => p.type === 'image' ? { type: 'text', text: '[Previous Image Omitted]' } : p) };
+        }).reverse()
+      );
 
-      // Convert to ModelMessage format for the AI provider
+      // Convert to strict ModelMessage format (required by AI SDK)
       let modelMessages = convertToModelMessages(formattedMessages);
 
-      // FIX: Manually restore images in User messages because convertToModelMessages may strip them from 'parts'
-      // We can't rely on index matching because convertToModelMessages may change the array structure
-      // Instead, we find user messages with images in the original and match them to model messages
-      const userMessagesWithImages = formattedMessages.filter(
-        (msg) => msg.role === 'user' && msg.parts?.some((p: any) => p.type === 'image')
-      );
+      // FIX: Restore image data for User messages (SDK's convertToModelMessages strips them)
+      const originalUserMsgs = formattedMessages.filter(m => m.role === 'user');
+      let userIdx = 0;
+      
+      modelMessages = modelMessages.map(msg => {
+        if (msg.role !== 'user') return msg;
+        const original = originalUserMsgs[userIdx++];
+        if (!original?.parts?.some((p: any) => p.type === 'image')) return msg;
 
-      if (userMessagesWithImages.length > 0) {
-        this.logger.log(`[DEBUG] Found ${userMessagesWithImages.length} user messages with images to restore`);
-        
-        // Find user messages in modelMessages and restore their image content
-        let userMsgIndex = 0;
-        modelMessages = modelMessages.map((msg) => {
-          if (msg.role === 'user') {
-            // Find the corresponding original user message (matching by order of user messages)
-            const originalUserMessages = formattedMessages.filter(m => m.role === 'user');
-            const originalMsg = originalUserMessages[userMsgIndex];
-            userMsgIndex++;
+        return {
+          ...msg,
+          content: original.parts.map((p: any) => {
+            if (p.type === 'image') return { type: 'image', image: p.image };
+            if (p.type === 'text') return { type: 'text', text: p.text || '' };
+            // Pass through other types (tool-call, tool-result, etc.)
+            return p;
+          }) as any
+        };
+      });
 
-            if (originalMsg && originalMsg.parts) {
-              const hasImages = originalMsg.parts.some((p: any) => p.type === 'image');
-              if (hasImages) {
-                this.logger.log(`[DEBUG] Restoring images for user message`);
-                // Reconstruct content array manually to ensure images are preserved
-                return {
-                  ...msg,
-                  content: originalMsg.parts.map((p: any) => {
-                    if (p.type === 'image') {
-                      this.logger.log(`[DEBUG] Adding image part with data length: ${(p.image || '').length}`);
-                      return { type: 'image', image: p.image };
-                    }
-                    if (p.type === 'text') {
-                      return { type: 'text', text: p.text };
-                    }
-                    return { type: 'text', text: '' }; // Fallback
-                  }) as any
-                };
-              }
-            }
-          }
-          return msg;
-        });
-      }
-
-      // DEBUG: Log the exact messages being sent to the AI model
-      this.logger.log(`Sending ${modelMessages.length} messages to model ${modelToUse}`);
-      this.logger.log(JSON.stringify(modelMessages, null, 2));
-
-      const hasTools = tools && Object.keys(tools).length > 0;
-
-      this.logger.log(
-        `🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelToUse} | Tokens: ${modeConfig.maxTokens} | Temp: ${modeConfig.temperature}`,
-      );
+      // 5. Final AI Execution
+      this.logger.log(`🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelToUse}`);
 
       const config: any = {
         model: groq(modelToUse),
@@ -266,7 +240,7 @@ Reply with ONLY "YES" or "NO".`
         maxTokens: modeConfig.maxTokens,
       };
 
-      if (hasTools) {
+      if (tools && Object.keys(tools).length > 0) {
         config.tools = tools;
         config.maxSteps = maxSteps;
       }
