@@ -12,7 +12,7 @@ export default registerAs(
         entities: [__dirname + '/../**/*.entity{.ts,.js}'],
         synchronize: false, // NEVER true in production! (can drop data)
         ssl: {
-          rejectUnauthorized: true,
+          rejectUnauthorized: false, // Accept DigitalOcean's self-signed certificates
         },
         logging: false,
       };
