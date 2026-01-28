@@ -30,14 +30,8 @@ export default registerAs(
       synchronize: true, // Auto-creates tables in dev
       logging: true,
       // SSL configuration for remote database
-      ssl: process.env.DB_SSL === 'true' ? {
-        rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== 'false',
-      } : false,
-      // Connection pooling to prevent connection drops
-      extra: {
-        max: 10, // Maximum number of clients in the pool
-        idleTimeoutMillis: 30000, // Close idle clients after 30 seconds
-        connectionTimeoutMillis: 10000, // Return error after 10 seconds if connection cannot be established
+      ssl: {
+        rejectUnauthorized: false,
       },
     };
   },
