@@ -19,10 +19,14 @@ import { SummaryService } from './tools/services/summary.service';
 // Modes system
 import { ModesModule } from './modes/modes.module';
 
+// Attachment system
+import { AttachmentModule } from '../attachment/attachment.module';
+
 @Module({
   imports: [
     TypeOrmModule.forFeature([Conversation, Message]),
     ModesModule, // Import mode services
+    AttachmentModule, // Import attachment services
   ],
   controllers: [ChatController],
   providers: [

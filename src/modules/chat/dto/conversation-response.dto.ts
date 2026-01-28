@@ -4,6 +4,7 @@ export class MessageResponseDto {
   id: string;
   role: string;
   content: string;
+  parts?: Array<any>;
   createdAt: Date;
   metadata?: MessageMetadata;
 
