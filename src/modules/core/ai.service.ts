@@ -206,31 +206,48 @@ Reply with ONLY "YES" or "NO".`
       let modelMessages = convertToModelMessages(formattedMessages);
 
       // FIX: Manually restore images in User messages because convertToModelMessages may strip them from 'parts'
-      // if it doesn't support them fully yet.
-      modelMessages = modelMessages.map((msg, index) => {
-        if (msg.role === 'user') {
-          const originalMsg = formattedMessages[index];
-          if (originalMsg && originalMsg.role === 'user' && originalMsg.parts) {
-            const hasImages = originalMsg.parts.some((p: any) => p.type === 'image');
-            if (hasImages) {
-              // Reconstruct content array manually to ensure images are preserved
-              return {
-                ...msg,
-                content: originalMsg.parts.map((p: any) => {
-                  if (p.type === 'image') {
-                    return { type: 'image', image: p.image };
-                  }
-                  if (p.type === 'text') {
-                    return { type: 'text', text: p.text };
-                  }
-                  return { type: 'text', text: '' }; // Fallback
-                }) as any
-              };
+      // We can't rely on index matching because convertToModelMessages may change the array structure
+      // Instead, we find user messages with images in the original and match them to model messages
+      const userMessagesWithImages = formattedMessages.filter(
+        (msg) => msg.role === 'user' && msg.parts?.some((p: any) => p.type === 'image')
+      );
+
+      if (userMessagesWithImages.length > 0) {
+        this.logger.log(`[DEBUG] Found ${userMessagesWithImages.length} user messages with images to restore`);
+        
+        // Find user messages in modelMessages and restore their image content
+        let userMsgIndex = 0;
+        modelMessages = modelMessages.map((msg) => {
+          if (msg.role === 'user') {
+            // Find the corresponding original user message (matching by order of user messages)
+            const originalUserMessages = formattedMessages.filter(m => m.role === 'user');
+            const originalMsg = originalUserMessages[userMsgIndex];
+            userMsgIndex++;
+
+            if (originalMsg && originalMsg.parts) {
+              const hasImages = originalMsg.parts.some((p: any) => p.type === 'image');
+              if (hasImages) {
+                this.logger.log(`[DEBUG] Restoring images for user message`);
+                // Reconstruct content array manually to ensure images are preserved
+                return {
+                  ...msg,
+                  content: originalMsg.parts.map((p: any) => {
+                    if (p.type === 'image') {
+                      this.logger.log(`[DEBUG] Adding image part with data length: ${(p.image || '').length}`);
+                      return { type: 'image', image: p.image };
+                    }
+                    if (p.type === 'text') {
+                      return { type: 'text', text: p.text };
+                    }
+                    return { type: 'text', text: '' }; // Fallback
+                  }) as any
+                };
+              }
             }
           }
-        }
-        return msg;
-      });
+          return msg;
+        });
+      }
 
       // DEBUG: Log the exact messages being sent to the AI model
       this.logger.log(`Sending ${modelMessages.length} messages to model ${modelToUse}`);
