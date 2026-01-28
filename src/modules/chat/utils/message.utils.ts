@@ -27,11 +27,6 @@ export class MessageUtils {
      * @returns Extracted text content
      */
     static extractText(message: FlexibleMessage): string {
-        // Handle legacy format with content string
-        if ('content' in message && typeof message.content === 'string') {
-            return message.content;
-        }
-
         // Handle standard format with parts array
         if ('parts' in message && Array.isArray(message.parts)) {
             return message.parts
@@ -40,6 +35,11 @@ export class MessageUtils {
                 )
                 .map((part) => part.text)
                 .join('');
+        }
+
+        // Handle legacy format with content string
+        if ('content' in message && typeof message.content === 'string') {
+            return message.content;
         }
 
         return '';
@@ -126,5 +126,85 @@ export class MessageUtils {
             }
         }
         return undefined;
+    }
+
+    /**
+     * Convert UIMessage to AI SDK format (sanitizes parts for the provider)
+     * @param message - Message with parts array
+     * @returns Message with sanitized parts array
+     */
+    static toAISDKFormat(message: UIMessage): UIMessage {
+        if (!message.parts || !Array.isArray(message.parts) || message.parts.length === 0) {
+            return message;
+        }
+
+        const sanitizedParts = message.parts.map((part: any) => {
+            // Text part
+            if (part.type === 'text') {
+                return {
+                    type: 'text',
+                    text: part.text || ''
+                };
+            }
+
+            // Image part - handle both URL and base64
+            if (part.type === 'image') {
+                const imageData = part.image || part.url;
+                if (!imageData) {
+                    throw new Error('Image part missing image data');
+                }
+
+                // If it's already a URL object, keep it
+                if (imageData instanceof URL) {
+                    return { type: 'image', image: imageData };
+                }
+
+                // If it's a string URL (web), convert to URL object
+                if (typeof imageData === 'string' && (imageData.startsWith('http://') || imageData.startsWith('https://'))) {
+                    return { type: 'image', image: new URL(imageData) };
+                }
+
+                // If it's a data URL string, pass it directly
+                if (typeof imageData === 'string' && imageData.startsWith('data:')) {
+                    return { type: 'image', image: imageData };
+                }
+
+                // If it's raw base64 (or a relative path that was missed), 
+                // we treat it as base64 if it doesn't look like a path
+                if (typeof imageData === 'string' && !imageData.startsWith('/')) {
+                    const mimeType = part.mimeType || 'image/jpeg';
+                    return { type: 'image', image: `data:${mimeType};base64,${imageData}` };
+                }
+
+                // If it's still a relative path here, something went wrong in resolveImageParts
+                // but we pass it anyway to avoid crashing, though the model will likely fail
+                return { type: 'image', image: imageData };
+            }
+
+            // File part - convert to text part for the model
+            if (part.type === 'file') {
+                return {
+                    type: 'text',
+                    text: part.text || ''
+                };
+            }
+
+            // For other part types, pass through as-is if they are valid AI SDK parts
+            return part;
+        });
+
+        return {
+            ...message,
+            parts: sanitizedParts as any
+        };
+    }
+
+    /**
+     * Batch convert multiple UIMessages to AI SDK format
+     * @param messages - Array of UIMessages
+     * @returns Array of messages in AI SDK format
+     */
+    static toAISDKFormatAll(messages: UIMessage[]): any[] {
+        return messages.map(msg => this.toAISDKFormat(msg));
     }
 }
