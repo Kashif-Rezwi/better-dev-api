@@ -14,6 +14,7 @@ import { groq } from '@ai-sdk/groq';
 import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
 import { MessageUtils } from '../chat/utils/message.utils';
 import { WEB_SEARCH_HISTORY_DEPTH } from '../chat/constants/chat.constants';
+import { getIntentAnalysisPrompt } from './prompts';
 
 @Injectable()
 export class AIService {
@@ -51,9 +52,7 @@ export class AIService {
   }
 
   // Analyze if the query needs web search tools
-  async analyzeQueryIntent(
-    messages: UIMessage[],
-  ): Promise<boolean> {
+  async analyzeQueryIntent(messages: UIMessage[]): Promise<boolean> {
     try {
       // Get the last user message
       const lastMessage = messages
@@ -81,22 +80,7 @@ export class AIService {
           role: 'system',
           parts: [{
             type: 'text',
-            text: `You are a query intent analyzer. Determine if a user query needs real-time web search.
-
-Answer "YES" if the query:
-- Asks for current/recent events, news, or statistics (e.g., "latest AI trends 2025", "today's weather")
-- Requests real-time information (e.g., "current stock price", "recent developments")
-- Needs up-to-date data that changes frequently
-
-Answer "NO" if the query:
-- Can be answered from general knowledge (e.g., "What is JavaScript?", "Explain OOP")
-- Is a follow-up question to a previous search (context is already available)
-- Asks about your capabilities (e.g., "How can you help me?")
-- Is a general conversation or clarification
-
-${hasRecentWebSearch ? '\nIMPORTANT: The conversation already has recent web search results. Unless the new query is asking for completely different real-time information, answer NO.' : ''}
-
-Reply with ONLY "YES" or "NO".`
+            text: getIntentAnalysisPrompt({ hasRecentWebSearch })
           }]
         },
         {
@@ -125,9 +109,7 @@ Reply with ONLY "YES" or "NO".`
     }
   }
 
-  /**
-   * Detect if messages contain images
-   */
+  //Detect if messages contain images
   private hasImageContent(messages: UIMessage[]): boolean {
     return messages.some(msg => {
       // Check parts (UI format)
@@ -146,10 +128,8 @@ Reply with ONLY "YES" or "NO".`
     });
   }
 
-  /**
-   * Stream response with mode-aware configuration
-   * Uses mode to determine model, tokens, temperature, and system prompt
-   */
+  // Stream response with mode-aware configuration
+  // Uses mode to determine model, tokens, temperature, and system prompt
   streamResponseWithMode(
     messages: UIMessage[],
     initialMode: EffectiveMode,
@@ -213,7 +193,7 @@ Reply with ONLY "YES" or "NO".`
       // FIX: Restore image data for User messages (SDK's convertToModelMessages strips them)
       const originalUserMsgs = formattedMessages.filter(m => m.role === 'user');
       let userIdx = 0;
-      
+
       modelMessages = modelMessages.map(msg => {
         if (msg.role !== 'user') return msg;
         const original = originalUserMsgs[userIdx++];
