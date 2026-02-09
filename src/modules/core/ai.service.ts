@@ -10,45 +10,32 @@ import {
   convertToModelMessages,
   type UIMessage,
 } from 'ai';
-import { groq } from '@ai-sdk/groq';
 import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
 import { MessageUtils } from '../chat/utils/message.utils';
 import { WEB_SEARCH_HISTORY_DEPTH } from '../chat/constants/chat.constants';
 import { getIntentAnalysisPrompt, getModeSystemPrompt } from './prompts';
+import { loadAllModels, logLoadedModels, type ModelInfo } from './utils/model-loader.util';
+import { getModelInstance } from './utils/model-instance.util';
 
 @Injectable()
 export class AIService {
   private readonly logger = new Logger(AIService.name);
-  private readonly modelName: string;
-  private readonly toolModelName: string;
-  private readonly textModelName: string;
-  private readonly visionModelName: string;
+  private readonly defaultModel: ModelInfo;
+  private readonly toolModel: ModelInfo;
+  private readonly textModel: ModelInfo;
+  private readonly visionModel: ModelInfo;
 
   constructor(
     private configService: ConfigService,
   ) {
-    this.modelName =
-      this.configService.get<string>('DEFAULT_AI_MODEL') ||
-      'openai/gpt-oss-120b';
+    const models = loadAllModels(this.configService);
 
-    this.toolModelName =
-      this.configService.get<string>('AI_TOOL_MODEL') ||
-      'llama-3.3-70b-versatile';
+    this.defaultModel = models.default;
+    this.toolModel = models.tool;
+    this.textModel = models.text;
+    this.visionModel = models.vision;
 
-    this.textModelName =
-      this.configService.get<string>('AI_TEXT_MODEL') ||
-      'llama-3.1-8b-instant';
-
-    this.visionModelName =
-      this.configService.get<string>('AI_VISION_MODEL') ||
-      'meta-llama/llama-4-scout-17b-16e-instruct'; // Llama 4 Scout vision model
-
-    // Log the models that have been loaded
-    this.logger.log(`🤖 AI Service Initialized`);
-    this.logger.log(`  - Default Model: ${this.modelName} (from DEFAULT_AI_MODEL)`);
-    this.logger.log(`  - Tool Model: ${this.toolModelName} (from AI_TOOL_MODEL)`);
-    this.logger.log(`  - Text Model: ${this.textModelName} (from AI_TEXT_MODEL)`);
-    this.logger.log(`  - Vision Model: ${this.visionModelName} (from AI_VISION_MODEL)`);
+    logLoadedModels(this.logger, models);
   }
 
   // Analyze if the query needs web search tools
@@ -212,10 +199,18 @@ export class AIService {
       });
 
       // 5. Final AI Execution
-      this.logger.log(`🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelToUse}`);
+      // Map mode to model info for multi-provider support
+      const modeModelMap: Record<EffectiveMode, ModelInfo> = {
+        fast: this.textModel,
+        thinking: this.toolModel,
+        vision: this.visionModel,
+      };
+      const modelInfo = modeModelMap[effectiveMode];
+
+      this.logger.log(`🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelInfo.name} [${modelInfo.provider}]`);
 
       const config: any = {
-        model: groq(modelToUse),
+        model: getModelInstance(modelInfo.name, modelInfo.provider),
         messages: modelMessages,
         temperature: modeConfig.temperature,
         maxTokens: modeConfig.maxTokens,
@@ -252,12 +247,12 @@ export class AIService {
       const hasTools = tools && Object.keys(tools).length > 0;
 
       // If we have tools, use the tool-calling model, If not, use the fast text model.
-      const modelToUse = hasTools ? this.toolModelName : this.textModelName;
+      const modelToUse = hasTools ? this.toolModel : this.textModel;
 
-      this.logger.log(`Streaming with model: ${modelToUse}`);
+      this.logger.log(`Streaming with model: ${modelToUse.name} [${modelToUse.provider}]`);
 
       const config: any = {
-        model: groq(modelToUse),
+        model: getModelInstance(modelToUse.name, modelToUse.provider),
         messages: modelMessages,
         temperature: 0.7,
         maxTokens: 2000,
@@ -284,10 +279,10 @@ export class AIService {
       const modelMessages = convertToModelMessages(messages);
 
       // Use the fast, cheap text model for non-streaming tasks
-      this.logger.log(`Generating response with model: ${this.textModelName}`);
+      this.logger.log(`Generating response with model: ${this.textModel.name} [${this.textModel.provider}]`);
 
       const result = await generateText({
-        model: groq(this.textModelName),
+        model: getModelInstance(this.textModel.name, this.textModel.provider),
         messages: modelMessages,
         temperature: 0.7,
         maxOutputTokens: 2000,
