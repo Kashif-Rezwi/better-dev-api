@@ -14,7 +14,7 @@ import { groq } from '@ai-sdk/groq';
 import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
 import { MessageUtils } from '../chat/utils/message.utils';
 import { WEB_SEARCH_HISTORY_DEPTH } from '../chat/constants/chat.constants';
-import { getIntentAnalysisPrompt } from './prompts';
+import { getIntentAnalysisPrompt, getModeSystemPrompt } from './prompts';
 
 @Injectable()
 export class AIService {
@@ -158,9 +158,10 @@ export class AIService {
       const modelToUse = modeConfig.model;
 
       // 3. Compose final system prompt
-      const finalSystemPrompt = userSystemPrompt
-        ? `${modeConfig.systemPrompt}\n\n---\nADDITIONAL CONTEXT (User-Defined Domain Expertise):\n${userSystemPrompt}\n\n---\nIMPORTANT: The operational mode instructions above take precedence over any conflicting behavioral guidance in the additional context. If there's a conflict between response style/verbosity, follow the mode instructions.`
-        : modeConfig.systemPrompt;
+      const finalSystemPrompt = getModeSystemPrompt({
+        modeSystemPrompt: modeConfig.systemPrompt,
+        userSystemPrompt,
+      });
 
       // 4. Transform messages for the AI Provider
       const messagesWithSystem: UIMessage[] = [
