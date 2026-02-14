@@ -52,16 +52,21 @@ export class ChatService {
 
     // 2. Fetch all attachments for this conversation
     // Use the metadata to find the entity name to avoid circular dependency issues
-    const attachments = await this.messageRepository.manager.createQueryBuilder()
+    const rawAttachments = await this.messageRepository.manager.createQueryBuilder()
       .select('a')
       .from('attachments', 'a')
       .where('a.conversationId = :conversationId', { conversationId })
       .getRawMany();
 
-    this.logger.debug(`[DEBUG] Pre-fetched ${attachments.length} attachments for conversation ${conversationId}`);
-    if (attachments.length > 0) {
-      this.logger.debug(`[DEBUG] First attachment ID: ${attachments[0].id}`);
-    }
+    // Convert to a Map for O(1) lookup
+    const attachmentMap = new Map<string, any>();
+    rawAttachments.forEach(a => {
+      // Handle potential prefixing from raw query result if using getRawMany
+      const id = (a.id || a.a_id || '').toString();
+      if (id) attachmentMap.set(id, a);
+    });
+
+    this.logger.debug(`[DEBUG] Pre-fetched ${attachmentMap.size} attachments for conversation ${conversationId}`);
 
     // 3. Prepend system prompt if exists
     const targetConversation = conversation || await this.conversationRepository.findOne({
@@ -82,38 +87,47 @@ export class ChatService {
     messages.forEach((msg) => {
       if (msg.parts && Array.isArray(msg.parts) && msg.parts.length > 0) {
         const processedParts = msg.parts.map((part: any) => {
-          if (part.type === 'file' && part.attachmentId) {
-            // Find attachment in our pre-fetched list (case-insensitive and string-safe)
-            const attachment = attachments.find((a) => 
-              (a.id?.toString() || a.a_id?.toString()) === part.attachmentId.toString()
-            );
+          // Handle both 'file' and 'image' parts that reference an attachmentId
+          if ((part.type === 'file' || part.type === 'image') && part.attachmentId) {
+            const attachment = attachmentMap.get(part.attachmentId.toString());
             
-            // Map raw database columns (a_column_name) to attachment object properties if needed
-            const normalizedAttachment = attachment ? {
-              extractionStatus: attachment.extractionStatus || attachment.a_extractionStatus,
-              extractedText: attachment.extractedText || attachment.a_extractedText,
-              fileName: attachment.fileName || attachment.a_fileName,
-            } : null;
+            if (attachment) {
+              const normalizedAttachment = {
+                extractionStatus: attachment.extractionStatus || attachment.a_extractionStatus,
+                extractedText: attachment.extractedText || attachment.a_extractedText,
+                fileName: attachment.fileName || attachment.a_fileName,
+                storageUrl: attachment.storageUrl || attachment.a_storageUrl,
+              };
 
-            if (normalizedAttachment) {
-              if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
-                const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
-                const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
-                const maxDocChars = maxDocTokens * charsPerToken;
-                
-                const text = normalizedAttachment.extractedText || '';
-                const truncatedText = text.length > maxDocChars 
-                  ? text.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens.]` 
-                  : text;
-                
+              // For files: Inject extracted text context
+              if (part.type === 'file') {
+                if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
+                  const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
+                  const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
+                  const maxDocChars = maxDocTokens * charsPerToken;
+                  
+                  const text = normalizedAttachment.extractedText || '';
+                  const truncatedText = text.length > maxDocChars 
+                    ? text.substring(0, maxDocChars) + `... [Text Truncated at ${maxDocTokens} tokens.]` 
+                    : text;
+                  
+                  return {
+                    ...part,
+                    text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
+                  };
+                } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
+                  return {
+                    ...part,
+                    text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
+                  };
+                }
+              }
+
+              // For images: Ensure the URL is present so resolveImageParts can handle it
+              if (part.type === 'image' && !part.url && !part.image && normalizedAttachment.storageUrl) {
                 return {
                   ...part,
-                  text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
-                };
-              } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
-                return {
-                  ...part,
-                  text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
+                  url: normalizedAttachment.storageUrl,
                 };
               }
             }
@@ -319,39 +333,54 @@ export class ChatService {
   // Resolve local image URLs to Base64 for the AI provider
   private async resolveImageParts(messages: UIMessage[]): Promise<UIMessage[]> {
     this.logger.log(`[DEBUG] resolveImageParts starting for ${messages.length} messages`);
-    const resolvedMessages = JSON.parse(JSON.stringify(messages));
+    
+    // Efficiently map messages without a full deep clone of heavy Base64 data
+    const resolvedMessages = await Promise.all(messages.map(async (msg) => {
+      if (!msg.parts || !Array.isArray(msg.parts)) {
+        return msg;
+      }
 
-    for (const msg of resolvedMessages) {
-      if (msg.parts && Array.isArray(msg.parts)) {
-        for (let i = 0; i < msg.parts.length; i++) {
-          const part = msg.parts[i] as any;
-          this.logger.log(`[DEBUG] Checking part type: ${part.type}, url: ${part.url}, image: ${part.image}`);
-          // Check if it's an image part with a relative URL
-          if (part.type === 'image' && (part.url || part.image) && (part.url?.startsWith('/uploads/') || part.image?.startsWith('/uploads/'))) {
-            try {
-              const url = part.url || part.image;
-              const relativePath = url.replace('/uploads/', '');
-              const uploadsPath = this.configService.get<string>('LOCAL_STORAGE_PATH') || './uploads';
-              const filePath = path.join(process.cwd(), uploadsPath, relativePath);
-              
-              this.logger.log(`[DEBUG] Attempting to read file: ${filePath}`);
-              const buffer = await fs.readFile(filePath);
-              const mimeType = part.mimeType || 'image/jpeg';
-              const base64 = buffer.toString('base64');
-              
-              msg.parts[i] = {
-                type: 'image',
-                image: `data:${mimeType};base64,${base64}`,
-              } as any;
-              
-              this.logger.log(`[DEBUG] Successfully resolved local image to base64: ${filePath.substring(0, 50)}...`);
-            } catch (error) {
-              this.logger.error(`[DEBUG] Failed to resolve local image: ${error.message}`);
-            }
+      const hasImagesToResolve = msg.parts.some((part: any) => 
+        part.type === 'image' && (part.url || part.image) && 
+        (part.url?.startsWith('/uploads/') || part.image?.startsWith('/uploads/'))
+      );
+
+      if (!hasImagesToResolve) {
+        return msg; // Return original message if no relative image paths
+      }
+
+      // Create a shallow copy of the message and deep copy parts
+      const updatedParts = await Promise.all(msg.parts.map(async (part: any) => {
+        if (part.type === 'image' && (part.url || part.image) && (part.url?.startsWith('/uploads/') || part.image?.startsWith('/uploads/'))) {
+          try {
+            const url = part.url || part.image;
+            const relativePath = url.replace('/uploads/', '');
+            const uploadsPath = this.configService.get<string>('LOCAL_STORAGE_PATH') || './uploads';
+            const filePath = path.join(process.cwd(), uploadsPath, relativePath);
+            
+            this.logger.log(`[DEBUG] Attempting to read file: ${filePath}`);
+            const buffer = await fs.readFile(filePath);
+            const mimeType = part.mimeType || 'image/jpeg';
+            const base64 = buffer.toString('base64');
+            
+            this.logger.log(`[DEBUG] Successfully resolved local image to base64: ${filePath.substring(0, 50)}...`);
+            return {
+              ...part,
+              image: `data:${mimeType};base64,${base64}`,
+            };
+          } catch (error) {
+            this.logger.error(`[DEBUG] Failed to resolve local image: ${error.message}`);
+            return part;
           }
         }
-      }
-    }
+        return part;
+      }));
+
+      return {
+        ...msg,
+        parts: updatedParts,
+      };
+    }));
 
     return resolvedMessages;
   }
@@ -380,41 +409,49 @@ export class ChatService {
   async getUserConversations(
     userId: string,
   ): Promise<ConversationResponseDto[]> {
+    // 1. Fetch conversations with basic metadata
     const conversations = await this.conversationRepository.find({
       where: { userId },
-      order: {
-        updatedAt: 'DESC',
-      },
-      relations: {
-        messages: true,
-      },
-      // Order messages within each conversation
-      relationLoadStrategy: 'query',  // Use separate query for better control
+      select: ['id', 'title', 'systemPrompt', 'createdAt', 'updatedAt'],
+      order: { updatedAt: 'DESC' },
     });
 
-    // Manually sort messages and get the actual last one
+    if (conversations.length === 0) return [];
+
+    // 2. Fetch only the LATEST message for each conversation in one batch
+    const conversationIds = conversations.map(c => c.id);
+    const lastMessages = await this.messageRepository.manager.createQueryBuilder()
+      .select('m')
+      .from('messages', 'm')
+      .where('m.conversationId IN (:...ids)', { ids: conversationIds })
+      .distinctOn(['m.conversationId'])
+      .orderBy('m.conversationId')
+      .addOrderBy('m.createdAt', 'DESC')
+      .getRawMany();
+
+    // Map for O(1) lookup
+    const lastMessageMap = new Map();
+    lastMessages.forEach(m => {
+      // Handle raw column prefixing
+      const convId = m.conversationId || m.m_conversationId;
+      lastMessageMap.set(convId, m);
+    });
+
     return conversations.map((conv) => {
-      // Sort messages by createdAt to ensure correct order
-      const sortedMessages = [...conv.messages].sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-
-      const lastMessage = sortedMessages.length > 0
-        ? sortedMessages[sortedMessages.length - 1]
-        : null;
-
+      const lastMsg = lastMessageMap.get(conv.id);
+      
       return new ConversationResponseDto({
         id: conv.id,
         title: conv.title,
         systemPrompt: conv.systemPrompt,
         createdAt: conv.createdAt,
         updatedAt: conv.updatedAt,
-        lastMessage: lastMessage
+        lastMessage: lastMsg
           ? new MessageResponseDto({
-            id: lastMessage.id,
-            role: lastMessage.role,
-            content: (lastMessage.content || '').substring(0, CONTENT_PREVIEW_LENGTH),
-            createdAt: lastMessage.createdAt,
+            id: lastMsg.id || lastMsg.m_id,
+            role: lastMsg.role || lastMsg.m_role,
+            content: (lastMsg.content || lastMsg.m_content || '').substring(0, CONTENT_PREVIEW_LENGTH),
+            createdAt: lastMsg.createdAt || lastMsg.m_createdAt,
           })
           : undefined,
       });
@@ -468,6 +505,7 @@ export class ChatService {
   ): Promise<Conversation> {
     const conversation = await this.conversationRepository.findOne({
       where: { id: conversationId },
+      select: ['id', 'userId', 'systemPrompt'],
     });
 
     if (!conversation) {
