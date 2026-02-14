@@ -10,50 +10,36 @@ import {
   convertToModelMessages,
   type UIMessage,
 } from 'ai';
-import { groq } from '@ai-sdk/groq';
 import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
 import { MessageUtils } from '../chat/utils/message.utils';
 import { WEB_SEARCH_HISTORY_DEPTH } from '../chat/constants/chat.constants';
+import { getIntentAnalysisPrompt, getModeSystemPrompt } from './prompts';
+import { loadAllModels, logLoadedModels, type ModelInfo } from './utils/model-loader.util';
+import { getModelInstance } from './utils/model-instance.util';
 
 @Injectable()
 export class AIService {
   private readonly logger = new Logger(AIService.name);
-  private readonly modelName: string;
-  private readonly toolModelName: string;
-  private readonly textModelName: string;
-  private readonly visionModelName: string;
+  private readonly defaultModel: ModelInfo;
+  private readonly toolModel: ModelInfo;
+  private readonly textModel: ModelInfo;
+  private readonly visionModel: ModelInfo;
 
   constructor(
     private configService: ConfigService,
   ) {
-    this.modelName =
-      this.configService.get<string>('DEFAULT_AI_MODEL') ||
-      'openai/gpt-oss-120b';
+    const models = loadAllModels(this.configService);
 
-    this.toolModelName =
-      this.configService.get<string>('AI_TOOL_MODEL') ||
-      'llama-3.3-70b-versatile';
+    this.defaultModel = models.default;
+    this.toolModel = models.tool;
+    this.textModel = models.text;
+    this.visionModel = models.vision;
 
-    this.textModelName =
-      this.configService.get<string>('AI_TEXT_MODEL') ||
-      'llama-3.1-8b-instant';
-
-    this.visionModelName =
-      this.configService.get<string>('AI_VISION_MODEL') ||
-      'meta-llama/llama-4-scout-17b-16e-instruct'; // Llama 4 Scout vision model
-
-    // Log the models that have been loaded
-    this.logger.log(`🤖 AI Service Initialized`);
-    this.logger.log(`  - Default Model: ${this.modelName} (from DEFAULT_AI_MODEL)`);
-    this.logger.log(`  - Tool Model: ${this.toolModelName} (from AI_TOOL_MODEL)`);
-    this.logger.log(`  - Text Model: ${this.textModelName} (from AI_TEXT_MODEL)`);
-    this.logger.log(`  - Vision Model: ${this.visionModelName} (from AI_VISION_MODEL)`);
+    logLoadedModels(this.logger, models);
   }
 
   // Analyze if the query needs web search tools
-  async analyzeQueryIntent(
-    messages: UIMessage[],
-  ): Promise<boolean> {
+  async analyzeQueryIntent(messages: UIMessage[]): Promise<boolean> {
     try {
       // Get the last user message
       const lastMessage = messages
@@ -81,22 +67,7 @@ export class AIService {
           role: 'system',
           parts: [{
             type: 'text',
-            text: `You are a query intent analyzer. Determine if a user query needs real-time web search.
-
-Answer "YES" if the query:
-- Asks for current/recent events, news, or statistics (e.g., "latest AI trends 2025", "today's weather")
-- Requests real-time information (e.g., "current stock price", "recent developments")
-- Needs up-to-date data that changes frequently
-
-Answer "NO" if the query:
-- Can be answered from general knowledge (e.g., "What is JavaScript?", "Explain OOP")
-- Is a follow-up question to a previous search (context is already available)
-- Asks about your capabilities (e.g., "How can you help me?")
-- Is a general conversation or clarification
-
-${hasRecentWebSearch ? '\nIMPORTANT: The conversation already has recent web search results. Unless the new query is asking for completely different real-time information, answer NO.' : ''}
-
-Reply with ONLY "YES" or "NO".`
+            text: getIntentAnalysisPrompt({ hasRecentWebSearch })
           }]
         },
         {
@@ -125,9 +96,7 @@ Reply with ONLY "YES" or "NO".`
     }
   }
 
-  /**
-   * Detect if messages contain images
-   */
+  //Detect if messages contain images
   private hasImageContent(messages: UIMessage[]): boolean {
     return messages.some(msg => {
       // Check parts (UI format)
@@ -146,10 +115,8 @@ Reply with ONLY "YES" or "NO".`
     });
   }
 
-  /**
-   * Stream response with mode-aware configuration
-   * Uses mode to determine model, tokens, temperature, and system prompt
-   */
+  // Stream response with mode-aware configuration
+  // Uses mode to determine model, tokens, temperature, and system prompt
   streamResponseWithMode(
     messages: UIMessage[],
     initialMode: EffectiveMode,
@@ -158,7 +125,7 @@ Reply with ONLY "YES" or "NO".`
     maxSteps: number = 5,
   ): { stream: ReturnType<typeof streamText>, modelUsed: string, effectiveMode: EffectiveMode } {
     try {
-      // Detect if messages contain images
+      // 1. Detect if messages contain images & determine EFFECTIVE mode
       const hasImages = this.hasImageContent(messages);
 
       // Determine the ACTUAL effective mode
@@ -170,21 +137,20 @@ Reply with ONLY "YES" or "NO".`
         this.logger.log(`🖼️  Images detected! Switching effective mode to: ${effectiveMode}`);
       }
 
-      // Get mode configuration based on the (potentially updated) effective mode
+      // 2. Get mode configuration
       const modeConfig = MODE_CONFIG[effectiveMode];
 
       // Use the model defined in the mode config
       // (Vision mode config will inherently point to the vision model)
       const modelToUse = modeConfig.model;
 
-      // Compose final system prompt (mode + user)
-      // If user provides custom prompt, append it to mode instructions
-      const modePrompt = modeConfig.systemPrompt;
-      const finalSystemPrompt = userSystemPrompt
-        ? `${modePrompt}\n\n---\nADDITIONAL CONTEXT (User-Defined Domain Expertise):\n${userSystemPrompt}\n\n---\nIMPORTANT: The operational mode instructions above take precedence over any conflicting behavioral guidance in the additional context. If there's a conflict between response style/verbosity, follow the mode instructions.`
-        : modePrompt;
+      // 3. Compose final system prompt
+      const finalSystemPrompt = getModeSystemPrompt({
+        modeSystemPrompt: modeConfig.systemPrompt,
+        userSystemPrompt,
+      });
 
-      // Inject system prompt as first message
+      // 4. Transform messages for the AI Provider
       const messagesWithSystem: UIMessage[] = [
         {
           id: 'system-prompt',
@@ -194,79 +160,63 @@ Reply with ONLY "YES" or "NO".`
         ...messages,
       ];
 
-      // Convert all messages to AI SDK format (sanitizes parts for the provider)
-      // This handles custom part types like 'file' by converting them to 'text'
-      const formattedMessages = MessageUtils.toAISDKFormatAll(messagesWithSystem);
+      // LIMIT IMAGES: Groq/Llama models typically support max 5 images.
+      // We keep images only for the last 3 user messages to stay within limits.
+      let imagesFound = 0;
+      const MAX_IMAGES = 5;
 
-      // DEBUG: Log formatted messages
-      this.logger.log(`[DEBUG] Formatted messages (UIMessage format):`);
-      this.logger.log(JSON.stringify(formattedMessages, null, 2));
+      const formattedMessages = MessageUtils.toAISDKFormatAll(
+        [...messagesWithSystem].reverse().map(msg => {
+          if (msg.role !== 'user' || !msg.parts?.some((p: any) => p.type === 'image')) return msg;
+          imagesFound++;
+          if (imagesFound <= MAX_IMAGES) return msg;
+          // Convert older images to text to save model context
+          return { ...msg, parts: msg.parts.map((p: any) => p.type === 'image' ? { type: 'text', text: '[Previous Image Omitted]' } : p) };
+        }).reverse()
+      );
 
-      // Convert to ModelMessage format for the AI provider
+      // Convert to strict ModelMessage format (required by AI SDK)
       let modelMessages = convertToModelMessages(formattedMessages);
 
-      // FIX: Manually restore images in User messages because convertToModelMessages may strip them from 'parts'
-      // We can't rely on index matching because convertToModelMessages may change the array structure
-      // Instead, we find user messages with images in the original and match them to model messages
-      const userMessagesWithImages = formattedMessages.filter(
-        (msg) => msg.role === 'user' && msg.parts?.some((p: any) => p.type === 'image')
-      );
+      // FIX: Restore image data for User messages (SDK's convertToModelMessages strips them)
+      const originalUserMsgs = formattedMessages.filter(m => m.role === 'user');
+      let userIdx = 0;
 
-      if (userMessagesWithImages.length > 0) {
-        this.logger.log(`[DEBUG] Found ${userMessagesWithImages.length} user messages with images to restore`);
-        
-        // Find user messages in modelMessages and restore their image content
-        let userMsgIndex = 0;
-        modelMessages = modelMessages.map((msg) => {
-          if (msg.role === 'user') {
-            // Find the corresponding original user message (matching by order of user messages)
-            const originalUserMessages = formattedMessages.filter(m => m.role === 'user');
-            const originalMsg = originalUserMessages[userMsgIndex];
-            userMsgIndex++;
+      modelMessages = modelMessages.map(msg => {
+        if (msg.role !== 'user') return msg;
+        const original = originalUserMsgs[userIdx++];
+        if (!original?.parts?.some((p: any) => p.type === 'image')) return msg;
 
-            if (originalMsg && originalMsg.parts) {
-              const hasImages = originalMsg.parts.some((p: any) => p.type === 'image');
-              if (hasImages) {
-                this.logger.log(`[DEBUG] Restoring images for user message`);
-                // Reconstruct content array manually to ensure images are preserved
-                return {
-                  ...msg,
-                  content: originalMsg.parts.map((p: any) => {
-                    if (p.type === 'image') {
-                      this.logger.log(`[DEBUG] Adding image part with data length: ${(p.image || '').length}`);
-                      return { type: 'image', image: p.image };
-                    }
-                    if (p.type === 'text') {
-                      return { type: 'text', text: p.text };
-                    }
-                    return { type: 'text', text: '' }; // Fallback
-                  }) as any
-                };
-              }
-            }
-          }
-          return msg;
-        });
-      }
+        return {
+          ...msg,
+          content: original.parts.map((p: any) => {
+            if (p.type === 'image') return { type: 'image', image: p.image };
+            if (p.type === 'text') return { type: 'text', text: p.text || '' };
+            // Pass through other types (tool-call, tool-result, etc.)
+            return p;
+          }) as any
+        };
+      });
 
-      // DEBUG: Log the exact messages being sent to the AI model
-      this.logger.log(`Sending ${modelMessages.length} messages to model ${modelToUse}`);
-      this.logger.log(JSON.stringify(modelMessages, null, 2));
+      // 5. Final AI Execution
+      // Map mode to model info for multi-provider support
+      const modeModelMap: Record<EffectiveMode, ModelInfo> = {
+        fast: this.textModel,
+        thinking: this.toolModel,
+        vision: this.visionModel,
+      };
+      const modelInfo = modeModelMap[effectiveMode];
 
-      const hasTools = tools && Object.keys(tools).length > 0;
-
-      this.logger.log(
-        `🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelToUse} | Tokens: ${modeConfig.maxTokens} | Temp: ${modeConfig.temperature}`,
-      );
+      this.logger.log(`🚀 Streaming with ${effectiveMode.toUpperCase()} mode | Model: ${modelInfo.name} [${modelInfo.provider}]`);
 
       const config: any = {
-        model: groq(modelToUse),
+        model: getModelInstance(modelInfo.name, modelInfo.provider),
         messages: modelMessages,
         temperature: modeConfig.temperature,
         maxTokens: modeConfig.maxTokens,
       };
 
-      if (hasTools) {
+      if (tools && Object.keys(tools).length > 0) {
         config.tools = tools;
         config.maxSteps = maxSteps;
       }
@@ -297,12 +247,12 @@ Reply with ONLY "YES" or "NO".`
       const hasTools = tools && Object.keys(tools).length > 0;
 
       // If we have tools, use the tool-calling model, If not, use the fast text model.
-      const modelToUse = hasTools ? this.toolModelName : this.textModelName;
+      const modelToUse = hasTools ? this.toolModel : this.textModel;
 
-      this.logger.log(`Streaming with model: ${modelToUse}`);
+      this.logger.log(`Streaming with model: ${modelToUse.name} [${modelToUse.provider}]`);
 
       const config: any = {
-        model: groq(modelToUse),
+        model: getModelInstance(modelToUse.name, modelToUse.provider),
         messages: modelMessages,
         temperature: 0.7,
         maxTokens: 2000,
@@ -329,10 +279,10 @@ Reply with ONLY "YES" or "NO".`
       const modelMessages = convertToModelMessages(messages);
 
       // Use the fast, cheap text model for non-streaming tasks
-      this.logger.log(`Generating response with model: ${this.textModelName}`);
+      this.logger.log(`Generating response with model: ${this.textModel.name} [${this.textModel.provider}]`);
 
       const result = await generateText({
-        model: groq(this.textModelName),
+        model: getModelInstance(this.textModel.name, this.textModel.provider),
         messages: modelMessages,
         temperature: 0.7,
         maxOutputTokens: 2000,

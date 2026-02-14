@@ -12,8 +12,9 @@ The API operates as a **Multi-Modal AI Engine**. It uses a sophisticated message
 - **Multi-Part Message System:** Replaces simple text with a `parts` array, allowing mixed media (Text + Images + Files) in a single message.
 - **Dynamic Mode Routing:** 
     - **Fast/Thinking:** User-selected modes for text/reasoning.
-    - **Vision:** Auto-detected mode when images are present, routing to visual models (e.g., Llama 4 Scout).
-- **Context Injection (RAG-Light):** Extracts text from documents and injects it directly into the context window, with intelligent truncation.
+    - **Vision:** Auto-detected mode when images are present, routing to visual models (e.g., Llama 4 Vision).
+- **O(1) Context Enrichment:** Uses a Map-based lookup strategy to instantly inject extracted text from documents into the AI context window.
+- **Vision History Window:** Automatically manages conversation history to stay within model limits (max 5 images), keeping only the most recent visual context.
 
 ---
 
@@ -22,22 +23,21 @@ The API operates as a **Multi-Modal AI Engine**. It uses a sophisticated message
 ### 1. Attachment Module (`src/modules/attachment`)
 *The gateway for all visual and document-based data.*
 
-- **`storage.service.ts`**: Abstracts storage logic (S3/Local).
+- **`storage.service.ts`**: Abstracts storage logic (S3/Local). Supports retrieval by `attachmentId` for efficient image resolution.
 - **`file-processor.service.ts`**: The "Parser" & "OCR Engine".
     - **Lifecycle Management:** Implements `OnModuleDestroy` to gracefully terminate Tesseract workers, preventing memory leaks.
     - **Images:** Uses **Tesseract.js** for OCR and **Sharp** for thumbnailing.
-    - **PDFs:** Uses **pdf-parse** (v1.1.1) to extract text. *Note: Downgraded to v1.1.1 to resolve runtime incompatibility issues.*
+    - **PDFs:** Uses **pdf-parse** (v1.1.1) to extract text.
     - **Documents:** Uses **mammoth** to convert Word docs to text.
 - **`attachment.service.ts`**: Coordinates uploads, enforces file size limits, and triggers the async processing pipeline.
 
 ### 2. Multi-Part Chat System (`src/modules/chat`)
-*Handling complex conversations efficiently.*
+*Handling complex conversations with industrial efficiency.*
 
 - **`chat.service.ts`**: The central orchestrator.
-    - **Optimized Data Flow:** Fetches conversation history **only once** per request to reduce DB load (50% read reduction).
-    - **Efficient Validation:** Uses lightweight queries for ownership and duplicate checks.
-    - **Context Management:** Aggregates text from messages and attachment `extractedText`.
-    - **Truncation:** Automatically cuts off document text exceeding ~32k tokens to ensure LLM stability.
+    - **Subquery Batching:** `getUserConversations` uses a `distinctOn` subquery to fetch the entire conversation list and their latest message previews in a single, lightweight database call.
+    - **O(1) Enrichment:** `getUIMessages` pre-fetches all attachments for a conversation into a `Map`, replacing $O(N^2)$ array searches with instant lookups.
+    - **Memory-Safe Resolution:** `resolveImageParts` swaps local file paths for Base64 data strings using `Promise.all` without deep-cloning history, preventing memory spikes.
 - **`message.entity.ts`**: Uses `parts` (JSONB) to store mixed modalities.
 - **`mode-resolver.service.ts`**: Determines the *Operational Mode* (Fast/Thinking/Auto) based on user preference or complexity analysis.
 
@@ -45,19 +45,16 @@ The API operates as a **Multi-Modal AI Engine**. It uses a sophisticated message
 *The intelligence layer.*
 
 - **`ai.service.ts`**: 
-    - **Single Streaming Entrypoint:** `streamResponseWithMode` handles all interaction types.
-    - **Vision Detection:** Scans message parts for image data (Base64/URL).
-    - **Effective Mode Switching:** If images are found, overrides the requested mode to `vision`.
+    - **Single-Pass Transformation:** `streamResponseWithMode` performs all message sanitization and model formatting in one pass.
+    - **Vision History Window:** Detects and limits images in the thread to the last **3 user messages**, converting older images to text placeholders to prevent model context crashes.
     - **Model Selection:**
         - **Vision:** `meta-llama/llama-4-scout-17b-16e-instruct`
         - **Tools/Thinking:** `llama-3.3-70b-versatile`
         - **Fast/Text:** `llama-3.1-8b-instant`
-    - **SDK Patch (Critical):** Includes a manual image restoration process that:
-        1. Filters user messages with images from `formattedMessages`
-        2. Tracks user message order separately using `userMsgIndex`
-        3. Reconstructs the `content` array with preserved image Base64 data
-        4. Ensures images survive the `convertToModelMessages` transformation
-    - **Why This Matters:** Without this patch, the AI Vision model would receive empty content arrays, causing it to respond with "I don't see any image" despite the frontend sending image data correctly.
+    - **SDK Patch (Enhanced):**
+        1. Normalizes custom parts (files/attachments) to standard AI SDK types.
+        2. Converts to `ModelMessage` format for strict provider compliance.
+        3. **Index-Safe Restoration:** Re-injects image data into user messages after SDK transformation, matching by sequential order to ensure zero data loss.
 
 ---
 
@@ -67,35 +64,34 @@ The API operates as a **Multi-Modal AI Engine**. It uses a sophisticated message
 graph TD
     subgraph Client
         Upload["Upload File to /attachment/upload"]
-        ChatReq["POST /chat/messages (with attachmentId/images)"]
+        ChatReq["POST /chat/messages (with attachmentId)"]
     end
 
     subgraph Attachment_Pipeline
         Store["StorageService: Save File"]
         Process["FileProcessor: Extract Text / OCR"]
-        Worker["Tesseract Worker (Managed Lifecycle)"]
         UpdateDB["Update Attachment: extractionStatus"]
     end
 
     subgraph Chat_Orchestration
-        Verify["ChatService: Verify Ownership (Lightweight)"]
-        Fetch["ChatService: Fetch History (Single Query)"]
-        Context["Inject extractedText from Attachments"]
-        Resolve["ModeResolver: Determine Operational Mode"]
+        Verify["Verify Ownership (Selective Select)"]
+        Fetch["Fetch History + O(1) Map Enrichment"]
+        Resolve["ModeResolver: Resolve Mode"]
+        ImageRes["Resolve Images to Base64 (Memory-Safe)"]
     end
 
     subgraph AI_Core
-        Detect["AIService: Detect Image Content"]
+        Detect["AIService: Detect Images & Limit History"]
         Switch{"Image Present?"}
-        Vision["Effective Mode: VISION"]
-        Text["Effective Mode: FAST/THINKING"]
-        Restore["AIService: Restore Image Data (Index-Safe)"]
-        Stream["AI SDK: Stream Text & Metadata"]
+        Vision["Mode: VISION (Llama 4)"]
+        Text["Mode: FAST/THINKING"]
+        Restore["Single-Pass SDK Format + Restore"]
+        Stream["AI SDK: Stream Text & Tools"]
     end
 
-    Upload --> Store --> Process --> Worker --> UpdateDB
+    Upload --> Store --> Process --> UpdateDB
     
-    ChatReq --> Verify --> Fetch --> Context --> Resolve --> Detect
+    ChatReq --> Verify --> Fetch --> Resolve --> ImageRes --> Detect
     
     Detect --> Switch
     Switch -- YES --> Vision
@@ -108,26 +104,26 @@ graph TD
 
 ---
 
-## 🔬 Detailed Implementation Notes (Recent Changes)
+## 🔬 Detailed Implementation Notes (Optimizations)
 
-### 1. PDF Parsing Fix
-- **Issue:** `pdf-parse` v2.x caused "pdf is not a function" errors due to export changes.
-- **Fix:** Downgraded to **v1.1.1** and used `require('pdf-parse')` to ensure stable text extraction from buffers.
+### 1. Efficient Conversation Listing
+- **Problem:** Loading the conversation sidebar was loading every message in history for every conversation, causing huge memory bloat.
+- **Solution:** Switched to a **Subquery Strategy** in `getUserConversations`. It now selects only the metadata and the latest message per conversation using `distinctOn` and `orderBy`.
 
-### 2. AI SDK Image Handling Patch (Critical)
-- **Issue 1:** The Vercel AI SDK's `convertToModelMessages` utility was stripping `parts` containing images when converting `UIMessage` to `ModelMessage`.
-- **Fix 1:** Implemented a manual post-processing step in `AIService` that re-injects the image data (Base64) into the `content` array of the user message *before* sending it to the Groq API.
-- **Issue 2 (Index Mismatch Bug):** The initial image restoration logic assumed array indices would match between `formattedMessages` and `modelMessages`, but `convertToModelMessages` can reorder or restructure the array, causing images to be lost or applied to wrong messages.
-- **Fix 2:** Refactored the image restoration logic to track user messages separately by their sequential order (`userMsgIndex`), rather than relying on absolute array indices. This ensures each user message in `modelMessages` is correctly matched with its corresponding message in `formattedMessages`, preserving image data through the transformation pipeline.
-- **Result:** The Vision model now correctly receives image data for all user messages containing images.
+### 2. O(1) Attachment Enrichment
+- **Problem:** Long chats with many files caused $O(N \times M)$ slowdowns as every message part searched through an array of attachments.
+- **Solution:** `getUIMessages` now builds a `Map<string, Attachment>` once. Lookups are now $O(1)$ (instant), regardless of how many files are in the chat.
 
-### 3. Tesseract Resource Management
-- **Issue:** Spawning a new Tesseract worker for every image request caused high CPU/Memory overhead and potential leaks.
-- **Fix:** Implemented `OnModuleDestroy` in `FileProcessorService` to maintain a singleton worker instance (or pool) and ensure `worker.terminate()` is called when the application shuts down.
+### 3. Vision History Window
+- **Problem:** Groq/Llama models crash with "Too many images" if the chat history exceeds 5 images.
+- **Solution:** `AIService` now counts images from the end of the history. Only the most recent **3 user messages** retain their visual data; older ones are converted to `[Image Omitted]` to save context.
 
-### 4. Database Optimization
-- **Issue:** `ChatService` was fetching the entire conversation history multiple times (once for ownership, once for context, once for duplicate check).
-- **Fix:** Refactored `getUIMessages` to accept an optional `conversation` entity, allowing the service to fetch the conversation metadata once and reuse it. Duplicate checks now query only the *last* message instead of the full history.
+### 4. Single-Pass Transformation & Restoration
+- **Problem:** Multiple transformation passes were stripping tool calls and occasionally crashing on strict SDK rules.
+- **Solution:** Refactored to a unified pipeline:
+    1. **Format:** Normalize `file` parts to `text`.
+    2. **Convert:** Use `convertToModelMessages` for strict SDK compliance.
+    3. **Restore:** Re-inject images and tool calls into the final `content` array using sequential matching.
 
 ---
 
@@ -139,7 +135,7 @@ graph TD
   ```json
   [
     { "type": "text", "text": "Analyze this..." }, 
-    { "type": "image", "image": "data:image/..." }, 
+    { "type": "image", "attachmentId": "uuid..." }, 
     { "type": "file", "attachmentId": "uuid..." }
   ]
   ```
@@ -148,84 +144,34 @@ graph TD
 
 ## 🛠️ Key Architectural Patterns
 
-- **Optimized Read-Path:** Single-query history loading prevents "N+1" style redundant fetches during the request lifecycle.
-- **Effective Mode Pattern:** Separation of "Requested Mode" (User intent) and "Effective Mode" (System requirement, e.g., Vision).
-- **Worker Lifecycle Management:** Explicit termination of resource-heavy workers (OCR) on application shutdown.
-- **Threshold Strategy:** Enforces token-based limits (32k/64k) to maintain performance before transitioning to full RAG.
-- **Multi-Part Serialization:** Native support for mixed media messages in database and API contracts.
-- **Index-Safe Image Restoration:** Matches user messages by their sequential order rather than absolute array indices to survive SDK transformations.
+- **Subquery Batching:** Prevents "N+1" message loading in the sidebar.
+- **Map-Based Enrichment:** Replaces linear searches with instant lookups.
+- **Vision History Window:** Automatically manages model context limits.
+- **Memory-Safe Mapping:** Avoids `JSON.stringify` clones on heavy Base64 data.
+- **Index-Safe Restoration:** Sequential message tracking ensures images survive SDK formatting.
 
 ---
 
 ## 🐛 Common Issues & Debugging
 
-### Issue: AI responds "I don't see any image" despite frontend sending image data
+### Issue: "Too many images provided" Error
+**Cause:** Chat history contains > 5 images.
+**Solution:** The system now automatically prunes images from history. Verify `MAX_IMAGES` in `ai.service.ts`.
 
-**Root Cause:** Image data is being lost during the `UIMessage` → `ModelMessage` transformation.
+### Issue: "Invalid prompt: The messages must be a ModelMessage[]"
+**Cause:** Manual transformation sent system messages as parts instead of strings.
+**Solution:** Reverted to `convertToModelMessages` followed by a targeted image restoration patch.
 
-**Debugging Steps:**
-1. **Check Frontend Payload:** Inspect Network tab. Ensure `parts` array contains `{ type: 'image', image: 'data:image/...' }`
-2. **Check Backend Logs:** Look for `[DEBUG] Restoring images for user message` in Docker logs
-3. **Verify Base64 Length:** Log should show `Adding image part with data length: [large number]`
-4. **Check Model Messages:** Log should show `content` array with `{ type: 'image', image: 'data:...' }`
-
-**If image data is present in frontend but not in backend logs:**
-- Check `ChatService.saveUIMessage` - Ensure `parts` array is being saved to DB
-- Check `ChatService.getUIMessages` - Ensure `parts` are being retrieved correctly
-
-**If image data is in backend logs but model still doesn't see it:**
-- Check `AIService.streamResponseWithMode` - The image restoration logic may need adjustment
-- Ensure `userMsgIndex` counter is tracking user messages correctly
-
-### Issue: Vision mode activates but wrong image is sent to model
-
-**Root Cause:** Array index mismatch during image restoration.
-
-**Fix Applied:** Changed from `formattedMessages[index]` to sequential user message tracking with `userMsgIndex`.
-
-### Issue: Large PDF uploads cause context window overflow
-
-**Mitigation:** 
-- Document text is truncated to ~32k tokens (128k characters) per file
-- Total context size is monitored and logged as warning if exceeding 64k tokens
-- Frontend should enforce max 10MB file size
-
-### Issue: OCR/PDF processing never completes
-
-**Debugging:**
-- Check `attachments` table for `extractionStatus` (should be `processing` → `success`)
-- Check Docker logs for `FileProcessorService` errors
-- Verify Tesseract worker is running: Look for `Terminating Tesseract Worker` on shutdown
+### Issue: Image blindness in Vision Mode
+**Cause:** SDK stripping image parts.
+**Solution:** Check `AIService` logs for `Restoring images for user message`. Verify sequential matching isn't skipping messages.
 
 ---
 
 ## 📋 Testing Checklist
 
-Before deploying multimodal features:
-
-1. **Text Only:**
-   - [ ] Fast mode responds quickly (< 2s)
-   - [ ] Thinking mode provides detailed analysis
-
-2. **Image Upload:**
-   - [ ] Image appears in chat UI
-   - [ ] AI describes image content accurately
-   - [ ] `effectiveMode` metadata shows `'vision'`
-   - [ ] Backend logs show `Restoring images for user message`
-
-3. **Document Upload:**
-   - [ ] PDF text extraction completes
-   - [ ] DOCX text extraction completes
-   - [ ] AI can answer questions about document content
-   - [ ] Large documents (> 100 pages) are truncated gracefully
-
-4. **Mixed Content:**
-   - [ ] Text + Image in same message works
-   - [ ] Text + File in same message works
-   - [ ] Multiple images in same message works
-
-5. **Edge Cases:**
-   - [ ] Empty message with only image works
-   - [ ] Very large image (8MB) uploads successfully
-   - [ ] Duplicate message detection works
-   - [ ] Vision mode auto-activates (not manually selectable)
+1. **Sidebar Loading:** Sidebar loads instantly even with 50+ conversations.
+2. **Image Context:** AI can see images in the most recent 3 user messages.
+3. **History Cleanup:** Oldest images in a long thread are replaced by text placeholders.
+4. **Tool Calls:** Web search still works and shows status in the UI.
+5. **Memory:** Server memory remains stable during large multimodal requests.

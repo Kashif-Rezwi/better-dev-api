@@ -1,14 +1,11 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import * as express from 'express';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
-
-  // Increase payload limits for base64 images
-  app.use(express.json({ limit: '50mb' }));
-  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Enable CORS for all origins
   app.enableCors({
@@ -24,6 +21,10 @@ async function bootstrap() {
       transform: true, // Auto-transform payloads to DTO types
     }),
   );
+
+  // Increase payload limits for file uploads (base64 images)
+  app.use(express.json({ limit: '60mb' }));
+  app.use(express.urlencoded({ limit: '60mb', extended: true }));
 
   const port = process.env.PORT!;
   await app.listen(port, '0.0.0.0'); // Listen on all interfaces

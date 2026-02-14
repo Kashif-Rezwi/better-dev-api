@@ -179,7 +179,8 @@ Database Transaction Flow:
 - **🤖 Multi-Model AI Support**
   - Fast text generation with Llama 3.1 8B
   - Advanced tool calling with Llama 3.3 70B
-  - Automatic model selection based on task
+  - **Native Vision support** with Llama 4 Scout (Automatic detection)
+  - Automatic model selection based on task and content type
 
 - **🔧 Extensible Tool System**
   - Plugin-based architecture
@@ -189,10 +190,11 @@ Database Transaction Flow:
   - Automatically determines if queries need web search
 
 - **💬 Conversation Management**
-  - Persistent conversation history
-  - Custom system prompts per conversation
-  - Automatic title generation
-  - Message metadata (tool calls, citations)
+  - Persistent history with JSONB parts support
+  - **Subquery Batching**: sidebar loads instantly by fetching only the latest message preview.
+  - **O(1) Enrichment**: Map-based lookup for instant attachment injection.
+  - Vision History Window: Automatically manages model limits (max 5 images).
+  - **Index-Safe Restoration**: Ensures zero data loss during SDK message transformation.
 
 - **🔐 Security**
   - JWT-based authentication
@@ -1706,6 +1708,9 @@ Contributions are welcome! Please follow these steps:
 - Add comments for complex logic
 - Maintain consistent formatting (use Prettier)
 - Write unit tests for new features
+- **Performance**: Use O(1) Map Lookups for data enrichment (avoid O(n) finds).
+- **Optimization**: Use Column-Selective Queries to reduce DB I/O.
+- **Memory**: Use memory-safe mapping instead of deep-cloning large history objects.
 
 ---
 
