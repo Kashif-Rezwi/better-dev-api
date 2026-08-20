@@ -27,11 +27,11 @@ services:
       - key: DEFAULT_AI_MODEL
         value: openai/gpt-oss-120b
       - key: AI_TEXT_MODEL
-        value: llama-3.1-8b-instant
+        value: openai/gpt-oss-20b
       - key: AI_TOOL_MODEL
-        value: llama-3.3-70b-versatile
+        value: openai/gpt-oss-120b
       - key: AI_VISION_MODEL
-        value: meta-llama/llama-4-scout-17b-16e-instruct
+        value: openai/gpt-oss-120b
       - key: USE_S3_STORAGE
         value: "true"
       - key: S3_BUCKET_NAME
