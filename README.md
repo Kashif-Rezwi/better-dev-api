@@ -1263,7 +1263,7 @@ Searches the web for current information using Tavily API.
 
 ## 🚢 Deployment
 
-This API is deployed on **DigitalOcean** using a production-grade architecture with Docker, PostgreSQL, Nginx reverse proxy, SSL certificates, and automated CI/CD.
+This API is deployed on **Render** (free tier) with **Neon** serverless PostgreSQL and **Cloudflare R2** object storage — a fully managed, $0/month production stack.
 
 **Live API**: `https://api.betterdev.in`
 
@@ -1273,23 +1273,54 @@ This API is deployed on **DigitalOcean** using a production-grade architecture w
 
 ```
 GitHub (push to main)
-       ↓ CI/CD
-GitHub Actions ───> SSH into VPS ───> Restart Docker Container
-                                     (auto-build + health check)
-DigitalOcean VPS (Ubuntu 22.04)
-       ↓
-NGINX (SSL, reverse proxy)
-       ↓
-Docker Container (NestJS API)
-       ↓
-PostgreSQL (VPS service)
+       ↓ native Git webhook (auto-deploy)
+Render Web Service (Node 20, Singapore region)
+       ↓ health check: GET /health
+Custom Domain: api.betterdev.in
+       ↓ (Hostinger DNS CNAME → better-dev-api.onrender.com)
+       ├──────────────┬───────────────────────┐
+       ▼              ▼                       ▼
+Neon PostgreSQL   Cloudflare R2          External APIs
+(serverless,      (attachments,          (Groq, Tavily)
+ free tier)        zero egress)
 ```
+
+### Render Configuration
+
+| Setting | Value |
+| :--- | :--- |
+| Service Type | Web Service (Node runtime) |
+| Plan | Free |
+| Region | Singapore |
+| Build Command | `npm install && npm run build` |
+| Start Command | `npm run start:prod` |
+| Health Check Path | `/health` |
+| Auto-Deploy | Enabled on `main` |
+
+Infrastructure is codified in [`render.yaml`](render.yaml) (Render Blueprint). All configuration keys are documented in [`.env.example`](.env.example).
+
+> **Free-tier note:** the Render free plan spins down after ~15 minutes of inactivity; the first request after idle takes ~30–60s (cold start). Optionally ping `/health` every 10 minutes with a free monitor (e.g. UptimeRobot, cron-job.org) to keep it warm.
+
+### Managing the Deployment
+
+```bash
+# Check health
+curl https://api.betterdev.in/health
+```
+
+- **Logs / shell / rollbacks:** Render Dashboard → `better-dev-api` → Logs / Shell / Deploys (one-click rollback to any previous green deploy).
+- **Database:** Neon Dashboard → `better-dev-db` (branching, query editor, monitoring).
+- **CI:** GitHub Actions (`.github/workflows/deploy.yml`) verifies the TypeScript build on every push/PR to `main`. Render handles deployment itself via the Git webhook — no SSH, no servers.
 
 ---
 
-### 🌐 DigitalOcean VPS Deployment
+### Legacy Infrastructure (Historical Reference)
 
-#### **Step 1: Prepare the VPS**
+> ⚠️ **Deprecated.** The API previously ran on a single DigitalOcean VPS (Ubuntu 22.04) with Docker, host-installed PostgreSQL, Nginx + Certbot SSL, and SSH-based GitHub Actions deploys. That droplet has been terminated and this setup no longer exists. The steps below are kept for historical reference only — **do not follow them for new deployments.**
+
+#### 🌐 DigitalOcean VPS Deployment (Deprecated)
+
+##### **Step 1: Prepare the VPS**
 
 1. **Create a DigitalOcean Droplet** with Ubuntu 22.04 LTS
 2. **SSH into the server**:
@@ -1306,7 +1337,7 @@ PostgreSQL (VPS service)
 
 ---
 
-#### **Step 2: Install Docker & Docker Compose**
+##### **Step 2: Install Docker & Docker Compose**
 
 ```bash
 # Install Docker
@@ -1328,7 +1359,7 @@ docker compose version
 
 ---
 
-#### **Step 3: Install PostgreSQL on VPS**
+##### **Step 3: Install PostgreSQL on VPS**
 
 Instead of running PostgreSQL in Docker, we use a standalone database for stability and performance:
 
@@ -1360,7 +1391,7 @@ sudo ufw allow 5432/tcp
 
 ---
 
-#### **Step 4: Clone Repository**
+##### **Step 4: Clone Repository**
 
 ```bash
 cd ~
@@ -1370,7 +1401,7 @@ cd better-dev-api
 
 ---
 
-#### **Step 5: Configure Environment**
+##### **Step 5: Configure Environment**
 
 Create `.env` file:
 
@@ -1408,7 +1439,7 @@ TAVILY_API_KEY=tvly-your-tavily-api-key
 
 ---
 
-#### **Step 6: Build & Start Docker Container**
+##### **Step 6: Build & Start Docker Container**
 
 ```bash
 # Build Docker image
@@ -1426,7 +1457,7 @@ docker compose logs -f
 
 ---
 
-#### **Step 7: Install & Configure Nginx Reverse Proxy**
+##### **Step 7: Install & Configure Nginx Reverse Proxy**
 
 ```bash
 # Install Nginx
@@ -1473,7 +1504,7 @@ sudo systemctl reload nginx
 
 ---
 
-#### **Step 8: Enable HTTPS with Certbot (Free SSL)**
+##### **Step 8: Enable HTTPS with Certbot (Free SSL)**
 
 ```bash
 # Install Certbot
@@ -1490,7 +1521,7 @@ Now your API is accessible at: **`https://api.betterdev.in`**
 
 ---
 
-#### **Step 9: Set Up GitHub Actions CI/CD (Auto Deploy)**
+##### **Step 9: Set Up GitHub Actions CI/CD (Auto Deploy)**
 
 This enables automatic deployment on every push to `main` branch.
 
@@ -1549,7 +1580,7 @@ Now, every push to `main` automatically deploys to production! 🚀
 
 ---
 
-### 🎯 Production Features
+#### 🎯 Production Features (Legacy)
 
 ✅ **Auto Deploy** - Push to GitHub → automatic deployment  
 ✅ **Auto Restart** - Docker restarts API if it crashes  
@@ -1561,7 +1592,7 @@ Now, every push to `main` automatically deploys to production! 🚀
 
 ---
 
-### 🔄 Managing Deployment
+#### 🔄 Managing Deployment (Legacy)
 
 ```bash
 # SSH into VPS

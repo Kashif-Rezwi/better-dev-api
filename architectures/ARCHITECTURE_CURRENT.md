@@ -168,6 +168,22 @@ graph TD
 
 ---
 
+## 🚀 Deployment & Hosting (Current)
+
+The API runs as a fully managed, free-tier production stack:
+
+- **Web Service:** [Render](https://render.com) free plan (Node 20 native runtime, Singapore region), auto-deployed from `main` via Render's native Git webhook. Health check: `GET /health`. Infrastructure is codified in `render.yaml` (Render Blueprint).
+- **Database:** [Neon](https://neon.tech) serverless PostgreSQL (free tier, 0.5GB), connected via the `DATABASE_URL` environment variable. Production runs TypeORM with `synchronize: false`; the schema was bootstrapped once via the dev path (`synchronize: true`).
+- **Object Storage:** [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) (free tier, 10GB, zero egress) via the provider-agnostic `StorageService` (`USE_S3_STORAGE=true`, `S3_PUBLIC_READ=false`, public URLs served through `S3_CDN_URL`).
+- **Custom Domain:** `api.betterdev.in` → CNAME to `better-dev-api.onrender.com` (Hostinger DNS), with Render-managed SSL.
+- **CI:** GitHub Actions builds the TypeScript project on every push/PR to `main`; deployment itself is handled by Render.
+
+**Free-tier characteristics:** the Render free web service spins down after ~15 minutes idle (first request after idle cold-starts in ~30–60s), and Neon scales the database to zero after inactivity (adds a few hundred ms to the first query).
+
+> The previous DigitalOcean VPS deployment (Docker + host PostgreSQL + Nginx + SSH CI/CD) has been decommissioned; see the *Legacy Infrastructure* section of the README for historical reference.
+
+---
+
 ## 📋 Testing Checklist
 
 1. **Sidebar Loading:** Sidebar loads instantly even with 50+ conversations.
