@@ -55,6 +55,8 @@ The application was previously deployed on a single Ubuntu 22.04 LTS Droplet:
    Production database configuration uses `synchronize: false`. On a newly provisioned Render PostgreSQL database, tables must be initialized upon first deployment.
 6. **Obsolete GitHub Actions Workflow**:
    [`.github/workflows/deploy.yml`](file:///Users/kashifrezwi/Developer/betterdev/better-dev-api/.github/workflows/deploy.yml) contains dead SSH actions pointing to the deleted VPS. This should be converted to a clean CI lint/build validation workflow, with Render handling deployment via native Git webhook.
+7. **Storage Service Hardcoded to DigitalOcean Spaces**:
+   [`storage.service.ts`](file:///Users/kashifrezwi/Developer/betterdev/better-dev-api/src/modules/attachment/services/storage.service.ts) previously (a) always sent `ACL: 'public-read'` on upload — which Cloudflare R2 and ACL-disabled AWS S3 buckets **reject** — and (b) constructed fallback URLs using the hardcoded `*.digitaloceanspaces.com` format. **RESOLVED**: the service is now provider-agnostic (see Task 5).
 
 ---
 
@@ -128,6 +130,8 @@ The application was previously deployed on a single Ubuntu 22.04 LTS Droplet:
 | `S3_ACCESS_KEY_ID` | If S3 | Access key ID | Storage API credentials |
 | `S3_SECRET_ACCESS_KEY` | If S3 | Secret access key | Storage API credentials |
 | `S3_CDN_URL` | No | Public custom CDN domain | Optional CDN distribution URL |
+| `S3_PUBLIC_READ` | No | `false` (default) | Set `true` ONLY for providers supporting object ACLs (e.g. DigitalOcean Spaces). R2/AWS must keep `false` |
+| `LOCAL_STORAGE_PATH` | No | `./uploads` | Local filesystem path when `USE_S3_STORAGE=false` (dev only) |
 | `MAX_UPLOAD_SIZE_BYTES` | No | `10485760` (10MB) | Max single upload size limit |
 
 ---
@@ -299,6 +303,13 @@ S3_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
 S3_ACCESS_KEY_ID=your-s3-access-key-id
 S3_SECRET_ACCESS_KEY=your-s3-secret-access-key
 S3_CDN_URL=
+# Set true ONLY for providers that support object ACLs (e.g. DigitalOcean Spaces).
+# Cloudflare R2 and ACL-disabled AWS S3 buckets REJECT uploads that include an ACL.
+# For R2, set S3_CDN_URL to the bucket's public r2.dev URL or custom domain instead.
+S3_PUBLIC_READ=false
+
+# Local filesystem storage (only used when USE_S3_STORAGE=false — development only)
+LOCAL_STORAGE_PATH=./uploads
 
 # ============================================
 # TOKEN & UPLOAD LIMITS
@@ -347,14 +358,48 @@ jobs:
 
 ---
 
-### Task 5: Update Documentation & Deprecate VPS Setup
+### Task 5: Make Object Storage Provider-Agnostic
+* **Type**: `Agent Implementation`
+* **Status**: ✅ **IMPLEMENTED** in [`src/modules/attachment/services/storage.service.ts`](file:///Users/kashifrezwi/Developer/betterdev/better-dev-api/src/modules/attachment/services/storage.service.ts)
+* **Objective**: Remove DigitalOcean Spaces hardcoding so uploads work on Cloudflare R2, AWS S3, or any S3-compatible provider.
+* **Changes Applied**:
+  1. **Conditional ACL**: `ACL: 'public-read'` is now only sent when `S3_PUBLIC_READ=true` (new env var, default `false`). R2 and ACL-disabled AWS buckets reject requests containing an ACL.
+  2. **Provider-agnostic public URL** via new `buildPublicUrl()`:
+     * `S3_CDN_URL` set → `{S3_CDN_URL}/{key}` (trailing slashes normalized).
+     * Else if `S3_ENDPOINT` set → virtual-hosted URL derived from the endpoint (e.g. `https://{bucket}.nyc3.digitaloceanspaces.com/{key}` — identical to the old DO behavior).
+     * Else → standard AWS URL `https://{bucket}.s3.{region}.amazonaws.com/{key}`.
+  3. Empty `S3_ENDPOINT` now maps to `undefined` so AWS S3 uses its regional default endpoint.
+  4. Log messages made provider-agnostic.
+* **Provider Notes**:
+  * **Cloudflare R2**: keep `S3_PUBLIC_READ=false`; the S3 API endpoint does not serve public objects — enable the bucket's public `r2.dev` URL or a custom domain and set it as `S3_CDN_URL`.
+  * **DigitalOcean Spaces**: set `S3_PUBLIC_READ=true` (public CDN access relies on object ACLs).
+  * **AWS S3**: keep `S3_PUBLIC_READ=false`; use bucket policy / CloudFront + `S3_CDN_URL` for public access.
+* **Validation**: `npm run build` compiles cleanly; URL construction verified for R2, DO Spaces, and AWS S3 configurations.
+
+---
+
+### Task 6: Initialize Database Schema on First Deploy
+* **Type**: `Agent Implementation` + `Manual User / Provider Action`
+* **Objective**: Resolve Finding #5 — production runs with `synchronize: false` and no TypeORM migrations exist, so a freshly provisioned Render PostgreSQL would have **no tables** and the app would fail on first query.
+* **Also Applied**: `database.config.ts` SSL comment updated from DigitalOcean-specific wording to provider-agnostic (`Accept managed provider certs`).
+* **Recommended Approach (zero code change — one-time bootstrap)**:
+  1. Create the Render PostgreSQL database first (Task 8).
+  2. From a local checkout, create a `.env` using the **individual** dev variables pointing at the Render database's **External Connection String** (host, port, user, password, database) — do **not** set `DATABASE_URL`.
+  3. Run `npm install && npm run start:dev` once. Because the dev path uses `synchronize: true`, TypeORM auto-creates all tables/indexes in the Render database.
+  4. Stop the local server. The schema now exists; deploy the Render web service with `DATABASE_URL` (production path, `synchronize: false`).
+* **Alternative (long-term hardening)**: introduce TypeORM migrations (`migration:generate` + `migrationsRun: true`) so future schema changes are versioned. Tracked as an optional future improvement.
+* **Validation**: after bootstrap, connect with `psql` and confirm `\dt` lists the entity tables (e.g. `users`, `conversations`, `messages`, `attachments`).
+
+---
+
+### Task 7: Update Documentation & Deprecate VPS Setup
 * **Type**: `Agent Implementation`
 * **Files**: [`README.md`](file:///Users/kashifrezwi/Developer/betterdev/better-dev-api/README.md), [`architectures/ARCHITECTURE_CURRENT.md`](file:///Users/kashifrezwi/Developer/betterdev/better-dev-api/architectures/ARCHITECTURE_CURRENT.md)
 * **Objective**: Move the old DigitalOcean VPS documentation to a clearly designated `### Legacy Infrastructure (Historical Reference)` section and document the new Render + PostgreSQL + Cloud Storage architecture as the single source of truth.
 
 ---
 
-### Task 6: Create Render PostgreSQL Database
+### Task 8: Create Render PostgreSQL Database
 * **Type**: `Manual User / Provider Action`
 * **Console**: [Render Dashboard](https://dashboard.render.com)
 * **Instructions**:
@@ -367,7 +412,7 @@ jobs:
 
 ---
 
-### Task 7: Create Render Web Service
+### Task 9: Create Render Web Service
 * **Type**: `Manual User / Provider Action`
 * **Console**: [Render Dashboard](https://dashboard.render.com)
 * **Instructions**:
@@ -386,17 +431,21 @@ jobs:
 
 ---
 
-### Task 8: Set Up S3-Compatible Object Storage
+### Task 10: Set Up S3-Compatible Object Storage
 * **Type**: `Manual User / Provider Action`
 * **Provider**: Cloudflare R2 (recommended: 0 egress fees) or AWS S3.
 * **Instructions**:
   1. Create bucket (e.g. `better-dev-attachments`).
   2. Generate S3 API Credentials (`Access Key ID`, `Secret Access Key`, `Endpoint URL`).
   3. Enter `USE_S3_STORAGE=true` and bucket credentials in Render Web Service environment variables.
+  4. **Public access (provider-specific — depends on Task 5 fix)**:
+     * **Cloudflare R2**: keep `S3_PUBLIC_READ=false` (R2 rejects ACLs). Enable the bucket's public `r2.dev` URL (or attach a custom domain) and set it as `S3_CDN_URL`.
+     * **AWS S3**: keep `S3_PUBLIC_READ=false`. Configure a bucket policy or CloudFront distribution for public reads and set `S3_CDN_URL` accordingly.
+     * **DigitalOcean Spaces** (if reusing existing bucket): set `S3_PUBLIC_READ=true` so objects are publicly readable via the Spaces CDN.
 
 ---
 
-### Task 9: Configure Custom Domain on Render
+### Task 11: Configure Custom Domain on Render
 * **Type**: `Manual User / Provider Action`
 * **Console**: Render Dashboard → `better-dev-api` → **Settings** → **Custom Domains**
 * **Instructions**:
@@ -405,7 +454,7 @@ jobs:
 
 ---
 
-### Task 10: Update DNS Record at Hostinger
+### Task 12: Update DNS Record at Hostinger
 * **Type**: `Manual User / Provider Action`
 * **Console**: Hostinger DNS Zone Management
 * **Instructions**:
@@ -420,11 +469,11 @@ jobs:
 
 ---
 
-### Task 11: Clean Up Stale GitHub Secrets
+### Task 13: Clean Up Stale GitHub Secrets
 * **Type**: `Manual User / Provider Action`
 * **Console**: GitHub `better-dev-api` → **Settings** → **Secrets and variables** → **Actions**
 * **Instructions**:
-  * Remove dead SSH keys and VPS IP references (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_PORT`, `SERVER_IP`).
+  * Remove dead SSH keys and VPS IP references (`SSH_HOST`, `SSH_USER`, `SSH_PRIVATE_KEY`, `SSH_PORT`, and `SERVER_IP` if present — the workflow only referenced the four `SSH_*` secrets).
 
 ---
 

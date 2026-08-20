@@ -21,6 +21,7 @@ export class StorageService {
     private readonly region: string;
     private readonly endpoint: string;
     private readonly cdnUrl: string;
+    private readonly publicReadAcl: boolean;
 
     constructor(private configService: ConfigService) {
         this.useS3 = this.configService.get('USE_S3_STORAGE') === 'true';
@@ -30,12 +31,19 @@ export class StorageService {
         this.region = this.configService.get('S3_REGION') || 'us-east-1';
         this.endpoint = this.configService.get('S3_ENDPOINT') || '';
         this.cdnUrl = this.configService.get('S3_CDN_URL') || '';
+        // Opt-in: only providers that support object ACLs (e.g. DigitalOcean
+        // Spaces) should enable this. Cloudflare R2 and ACL-disabled AWS S3
+        // buckets REJECT PutObject requests that include an ACL.
+        this.publicReadAcl =
+            this.configService.get('S3_PUBLIC_READ') === 'true';
 
         if (this.useS3) {
-            // DigitalOcean Spaces configuration
+            // S3-compatible configuration (AWS S3, Cloudflare R2, DigitalOcean Spaces, ...)
             this.s3Client = new S3Client({
                 region: this.region,
-                endpoint: this.endpoint, // e.g., https://nyc3.digitaloceanspaces.com
+                // e.g. https://nyc3.digitaloceanspaces.com or https://<account>.r2.cloudflarestorage.com
+                // Leave empty for AWS S3 (endpoint is derived from region).
+                endpoint: this.endpoint || undefined,
                 credentials: {
                     accessKeyId: this.configService.get('S3_ACCESS_KEY_ID') || '',
                     secretAccessKey:
@@ -43,10 +51,11 @@ export class StorageService {
                 },
                 forcePathStyle: false, // Use virtual-hosted-style URLs
             });
-            this.logger.log('✅ DigitalOcean Spaces storage initialized');
-            this.logger.log(`   Endpoint: ${this.endpoint}`);
+            this.logger.log('✅ S3-compatible storage initialized');
+            this.logger.log(`   Endpoint: ${this.endpoint || '(AWS default)'}`);
             this.logger.log(`   Bucket: ${this.bucketName}`);
             this.logger.log(`   Region: ${this.region}`);
+            this.logger.log(`   Public-read ACL: ${this.publicReadAcl}`);
         } else {
             this.ensureLocalStorageDir();
             this.logger.log('✅ Local storage initialized');
@@ -75,22 +84,42 @@ export class StorageService {
             Key: key,
             Body: file.buffer,
             ContentType: file.mimetype,
-            ACL: 'public-read', // DigitalOcean Spaces: public for CDN access
+            // Only send an ACL when the provider supports it (opt-in via
+            // S3_PUBLIC_READ=true). Cloudflare R2 / ACL-disabled AWS buckets
+            // reject requests containing an ACL.
+            ...(this.publicReadAcl ? { ACL: 'public-read' as const } : {}),
         });
 
         await this.s3Client!.send(command);
 
-        // Use CDN URL if configured, otherwise use direct Spaces URL
-        let url: string;
-        if (this.cdnUrl) {
-            url = `${this.cdnUrl}/${key}`;
-        } else {
-            // DigitalOcean Spaces URL format: https://{bucket}.{region}.digitaloceanspaces.com/{key}
-            url = `https://${this.bucketName}.${this.region}.digitaloceanspaces.com/${key}`;
-        }
+        const url = this.buildPublicUrl(key);
 
-        this.logger.log(`Uploaded to DigitalOcean Spaces: ${key}`);
+        this.logger.log(`Uploaded to object storage: ${key}`);
         return { url, key, size: file.size };
+    }
+
+    /**
+     * Build the public URL for an uploaded object, provider-agnostically:
+     * 1. S3_CDN_URL (custom CDN / R2 public domain / CloudFront) if configured.
+     * 2. Virtual-hosted-style URL derived from S3_ENDPOINT
+     *    (e.g. https://{bucket}.nyc3.digitaloceanspaces.com/{key}).
+     * 3. Standard AWS S3 URL when no custom endpoint is configured
+     *    (https://{bucket}.s3.{region}.amazonaws.com/{key}).
+     *
+     * Note: for Cloudflare R2, the S3 API endpoint does not serve public
+     * objects — set S3_CDN_URL to the bucket's public r2.dev URL or custom domain.
+     */
+    private buildPublicUrl(key: string): string {
+        if (this.cdnUrl) {
+            return `${this.cdnUrl.replace(/\/+$/, '')}/${key}`;
+        }
+        if (this.endpoint) {
+            const endpointHost = this.endpoint
+                .replace(/^https?:\/\//, '')
+                .replace(/\/+$/, '');
+            return `https://${this.bucketName}.${endpointHost}/${key}`;
+        }
+        return `https://${this.bucketName}.s3.${this.region}.amazonaws.com/${key}`;
     }
 
     private async uploadLocally(
