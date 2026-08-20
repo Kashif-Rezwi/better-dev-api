@@ -46,3 +46,6 @@ services:
         sync: false
       - key: S3_CDN_URL
         sync: false
+      # Supabase Storage requires path-style S3 URLs.
+      - key: S3_FORCE_PATH_STYLE
+        value: "true"

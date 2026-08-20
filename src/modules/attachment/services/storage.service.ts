@@ -22,6 +22,7 @@ export class StorageService {
     private readonly endpoint: string;
     private readonly cdnUrl: string;
     private readonly publicReadAcl: boolean;
+    private readonly forcePathStyle: boolean;
 
     constructor(private configService: ConfigService) {
         this.useS3 = this.configService.get('USE_S3_STORAGE') === 'true';
@@ -36,6 +37,11 @@ export class StorageService {
         // buckets REJECT PutObject requests that include an ACL.
         this.publicReadAcl =
             this.configService.get('S3_PUBLIC_READ') === 'true';
+        // Path-style URLs (endpoint/bucket/key) are required by providers
+        // like Supabase Storage whose S3 endpoint does not support
+        // virtual-hosted-style (bucket.endpoint/key) addressing.
+        this.forcePathStyle =
+            this.configService.get('S3_FORCE_PATH_STYLE') === 'true';
 
         if (this.useS3) {
             // S3-compatible configuration (AWS S3, Cloudflare R2, DigitalOcean Spaces, ...)
@@ -49,13 +55,14 @@ export class StorageService {
                     secretAccessKey:
                         this.configService.get('S3_SECRET_ACCESS_KEY') || '',
                 },
-                forcePathStyle: false, // Use virtual-hosted-style URLs
+                forcePathStyle: this.forcePathStyle,
             });
             this.logger.log('✅ S3-compatible storage initialized');
             this.logger.log(`   Endpoint: ${this.endpoint || '(AWS default)'}`);
             this.logger.log(`   Bucket: ${this.bucketName}`);
             this.logger.log(`   Region: ${this.region}`);
             this.logger.log(`   Public-read ACL: ${this.publicReadAcl}`);
+            this.logger.log(`   Path-style URLs: ${this.forcePathStyle}`);
         } else {
             this.ensureLocalStorageDir();
             this.logger.log('✅ Local storage initialized');
