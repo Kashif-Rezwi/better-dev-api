@@ -1265,7 +1265,8 @@ Searches the web for current information using Tavily API.
 
 This API is deployed on **Render** (free tier) with **Neon** serverless PostgreSQL and **Cloudflare R2** object storage — a fully managed, $0/month production stack.
 
-**Live API**: `https://api.betterdev.in`
+**Live API**: `https://better-dev-api.onrender.com`  
+**Live Frontend**: `https://better-dev-ui-kashifrezwis-projects.vercel.app`
 
 ---
 
@@ -1276,8 +1277,8 @@ GitHub (push to main)
        ↓ native Git webhook (auto-deploy)
 Render Web Service (Node 20, Singapore region)
        ↓ health check: GET /health
-Custom Domain: api.betterdev.in
-       ↓ (Hostinger DNS CNAME → better-dev-api.onrender.com)
+Default Domain: better-dev-api.onrender.com
+       ↓ (Render-managed SSL; no custom domain)
        ├──────────────┬───────────────────────┐
        ▼              ▼                       ▼
 Neon PostgreSQL   Cloudflare R2          External APIs
@@ -1305,7 +1306,7 @@ Infrastructure is codified in [`render.yaml`](render.yaml) (Render Blueprint). A
 
 ```bash
 # Check health
-curl https://api.betterdev.in/health
+curl https://better-dev-api.onrender.com/health
 ```
 
 - **Logs / shell / rollbacks:** Render Dashboard → `better-dev-api` → Logs / Shell / Deploys (one-click rollback to any previous green deploy).

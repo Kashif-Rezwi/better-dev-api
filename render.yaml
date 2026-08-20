@@ -19,7 +19,7 @@ services:
       - key: JWT_EXPIRATION
         value: 7d
       - key: FRONTEND_URL
-        value: "https://www.betterdev.in,https://betterdev.in"
+        value: "https://better-dev-ui-kashifrezwis-projects.vercel.app"
       - key: GROQ_API_KEY
         sync: false
       - key: TAVILY_API_KEY
