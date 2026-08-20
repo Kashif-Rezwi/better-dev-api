@@ -21,19 +21,23 @@ export const MODEL_CONFIGS: Record<ModelType, ModelConfig> = {
     },
     tool: {
         envKey: 'AI_TOOL_MODEL',
-        defaultValue: 'llama-3.3-70b-versatile',
+        defaultValue: 'openai/gpt-oss-120b',
         description: 'Tool Model',
         provider: 'groq' as ProviderName,
     },
     text: {
         envKey: 'AI_TEXT_MODEL',
-        defaultValue: 'llama-3.1-8b-instant',
+        defaultValue: 'openai/gpt-oss-20b',
         description: 'Text Model',
         provider: 'groq' as ProviderName,
     },
+    // No vision-capable model is currently available on Groq's free tier
+    // (all Llama 4 vision models were retired). Images are still handled via
+    // server-side OCR (tesseract.js) whose extracted text is injected into
+    // the context, so gpt-oss-120b can answer from the OCR text.
     vision: {
         envKey: 'AI_VISION_MODEL',
-        defaultValue: 'meta-llama/llama-4-scout-17b-16e-instruct',
+        defaultValue: 'openai/gpt-oss-120b',
         description: 'Vision Model',
         provider: 'groq' as ProviderName,
     },

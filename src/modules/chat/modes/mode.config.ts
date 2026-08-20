@@ -22,7 +22,7 @@ export interface ModeConfig {
  */
 export const MODE_CONFIG: Record<EffectiveMode, ModeConfig> = {
     fast: {
-        model: process.env.AI_TEXT_MODEL || 'llama-3.1-8b-instant',
+        model: process.env.AI_TEXT_MODEL || 'openai/gpt-oss-20b',
         maxTokens: 500,
         temperature: 0.5,
         systemPrompt: `You are operating in FAST MODE.
@@ -38,7 +38,7 @@ Your goal is to provide quick, accurate answers with minimal verbosity.`,
     },
 
     thinking: {
-        model: process.env.AI_TOOL_MODEL || 'llama-3.3-70b-versatile',
+        model: process.env.AI_TOOL_MODEL || 'openai/gpt-oss-120b',
         maxTokens: 4000,
         temperature: 0.7,
         systemPrompt: `You are operating in THINKING MODE.
@@ -54,7 +54,7 @@ Your goal is to demonstrate deep understanding and provide complete, well-reason
     },
 
     vision: {
-        model: process.env.AI_VISION_MODEL || 'meta-llama/llama-4-scout-17b-16e-instruct',
+        model: process.env.AI_VISION_MODEL || 'openai/gpt-oss-120b',
         maxTokens: 2000,
         temperature: 0.6,
         systemPrompt: `You are operating in VISION MODE.
