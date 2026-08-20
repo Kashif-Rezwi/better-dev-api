@@ -1,0 +1,48 @@
+services:
+  - type: web
+    name: better-dev-api
+    runtime: node
+    plan: free
+    region: singapore
+    buildCommand: npm install && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # External free PostgreSQL (Neon) — paste the pooled connection string
+      # in the Render dashboard (Neon is not a Render-managed database).
+      - key: DATABASE_URL
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRATION
+        value: 7d
+      - key: FRONTEND_URL
+        value: "https://www.betterdev.in,https://betterdev.in"
+      - key: GROQ_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: DEFAULT_AI_MODEL
+        value: openai/gpt-oss-120b
+      - key: AI_TEXT_MODEL
+        value: llama-3.1-8b-instant
+      - key: AI_TOOL_MODEL
+        value: llama-3.3-70b-versatile
+      - key: AI_VISION_MODEL
+        value: meta-llama/llama-4-scout-17b-16e-instruct
+      - key: USE_S3_STORAGE
+        value: "true"
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: S3_REGION
+        sync: false
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_CDN_URL
+        sync: false
