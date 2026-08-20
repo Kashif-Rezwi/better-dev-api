@@ -11,7 +11,7 @@ async function bootstrap() {
   const rawFrontendUrls = process.env.FRONTEND_URL || 'http://localhost:3000';
   const allowedOrigins = rawFrontendUrls
     .split(',')
-    .map((origin) => origin.trim())
+    .map((origin) => origin.trim().replace(/\/+$/, '')) // strip trailing slashes
     .filter(Boolean);
 
   app.enableCors({
