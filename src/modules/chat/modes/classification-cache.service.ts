@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { EffectiveMode } from './mode.config';
+import type { EffectiveMode } from '../../core/config/mode.config';
 import type { UIMessage } from 'ai';
 import { createHash } from 'crypto';
-import { MessageUtils } from '../utils/message.utils';
+import { MessageUtils } from '../../core/utils/message.utils';
 
 /**
  * Cache entry with expiration

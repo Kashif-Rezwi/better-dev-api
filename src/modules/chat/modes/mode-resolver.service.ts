@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import type { OperationalMode, EffectiveMode } from './mode.config';
+import type { OperationalMode, EffectiveMode } from '../../core/config/mode.config';
 import { AutoClassifierService } from './auto-classifier.service';
 import type { UIMessage } from 'ai';
 
