@@ -33,7 +33,7 @@
 Better DEV AI Backend is a production-ready NestJS 11 application powering an intelligent multi-modal conversational AI system. It provides:
 
 - **Real-time AI Conversations** with Server-Sent Events (SSE) streaming using Vercel AI SDK v5.
-- **Multi-Modal Document & Image Processing** with Tesseract OCR, PDF parsing, Word document text extraction, and Cloudflare R2 / S3 storage.
+- **Multi-Modal Document & Image Processing** with Tesseract OCR, PDF parsing, Word document text extraction, and Supabase Object Storage (S3-compatible).
 - **Intelligent Tool Execution** with autonomous web search query intent analysis powered by Tavily.
 - **Dynamic Operational Modes** (Fast, Thinking, Vision, Auto-Classifier with 5-minute MD5 query caching).
 - **Enterprise-Grade Reliability**: Global exception formatting, structured latency logging interceptor, transaction boundaries for multi-table writes, and composite database indexing.
@@ -71,7 +71,7 @@ graph TD
 
     subgraph Data_Storage["Data & Storage Infrastructure"]
         Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Composite Indexes)")]
-        Storage[("Object Storage<br/>(Cloudflare R2 / AWS S3 / Local)")]
+        Storage[("Object Storage<br/>(Supabase Storage S3 / Local)")]
     end
 
     UI_Upload --> Guard --> Validation --> AttachM
@@ -106,7 +106,7 @@ graph TD
 - **Auto Mode**: Evaluates query complexity via fast heuristic pre-filtering and LLM analysis, cached for 5 minutes via in-memory MD5 cache.
 
 ### 3. File Processing & Object Storage
-- **Unified Storage Driver**: Provider-agnostic S3/Cloudflare R2/Local storage driver with native `crypto.randomUUID()`.
+- **Unified Storage Driver**: Provider-agnostic S3-compatible storage driver (Supabase Object Storage via the AWS S3 SDK) with native `crypto.randomUUID()` and local-disk fallback.
 - **In-Process Content Extraction**:
   - Images: OCR text extraction via Tesseract.js and thumbnail generation via Sharp.
   - PDFs: Text extraction via `pdf-parse`.
@@ -125,9 +125,9 @@ graph TD
 | Layer | Technologies |
 | :--- | :--- |
 | **Framework** | NestJS 11, TypeScript 5.7, Express 5 |
-| **AI Engine** | Vercel AI SDK v5, Groq SDK, `@ai-sdk/openai` |
+| **AI Engine** | Vercel AI SDK v5 (`ai` + `@ai-sdk/groq`), Groq models via OpenAI-compatible naming |
 | **Database & ORM** | PostgreSQL 16 (Neon Serverless), TypeORM 0.3 |
-| **Object Storage** | AWS S3 SDK v3 (Cloudflare R2 / AWS S3 / Local Disk) |
+| **Object Storage** | AWS S3 SDK v3 (Supabase Object Storage S3-compatible / Local Disk) |
 | **File Processing** | Tesseract.js, Sharp, `pdf-parse`, `mammoth` |
 | **Validation & Auth** | `class-validator`, `class-transformer`, Passport JWT, bcrypt |
 | **Search & Tools** | Tavily Web Search API, Zod schema validation |
@@ -431,16 +431,16 @@ AI_VISION_MODEL=openai/gpt-oss-120b
 # Search Tools
 TAVILY_API_KEY=tvly-your-tavily-api-key
 
-# Storage (Cloudflare R2 / AWS S3 / Supabase Storage)
+# Storage (Supabase Object Storage — S3-compatible)
 USE_S3_STORAGE=true
-S3_REGION=auto
-S3_BUCKET=better-dev-attachments
-S3_ENDPOINT=https://your-account-id.r2.cloudflarestorage.com
+S3_REGION=ap-south-1
+S3_BUCKET_NAME=better-dev-attachments
+S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
 S3_ACCESS_KEY_ID=your_access_key
 S3_SECRET_ACCESS_KEY=your_secret_key
 S3_FORCE_PATH_STYLE=true
 S3_PUBLIC_READ=false
-S3_CDN_URL=https://your-cdn-domain.com
+S3_CDN_URL=https://<project-ref>.supabase.co/storage/v1/object/public/better-dev-attachments
 ```
 
 ---
@@ -489,5 +489,5 @@ The production stack runs on fully managed cloud infrastructure:
 
 - **Web API Service**: [Render](https://render.com) (Node.js 20 native runtime, health check: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health)).
 - **Database**: [Neon](https://neon.tech) Serverless PostgreSQL 16.
-- **Object Storage**: [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) / S3-compatible storage with zero egress fees.
+- **Object Storage**: [Supabase](https://supabase.com/docs/guides/storage) Object Storage (S3-compatible) — switched from Cloudflare R2 for free-tier price constraints. Attachment files are stored in Supabase Storage and served via its public object URL (`storage/v1/object/public/...`).
 - **Frontend UI**: [Vercel](https://vercel.com) ([better-dev-ui.vercel.app](https://better-dev-ui.vercel.app)).
