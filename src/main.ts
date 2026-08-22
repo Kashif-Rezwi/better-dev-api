@@ -1,10 +1,13 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, Logger } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
+import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { LoggingInterceptor } from './common/interceptors/logging.interceptor';
 import * as express from 'express';
 
 async function bootstrap() {
+  const logger = new Logger('Bootstrap');
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
 
   // Enable CORS for allowed origins
@@ -28,6 +31,10 @@ async function bootstrap() {
     allowedHeaders: ['Content-Type', 'Authorization', 'Accept', 'X-Requested-With'],
   });
 
+  // Global filters and interceptors
+  app.useGlobalFilters(new GlobalExceptionFilter());
+  app.useGlobalInterceptors(new LoggingInterceptor());
+
   // Global validation pipe
   app.useGlobalPipes(
     new ValidationPipe({
@@ -37,14 +44,14 @@ async function bootstrap() {
     }),
   );
 
-  // Increase payload limits for file uploads (base64 images)
-  app.use(express.json({ limit: '60mb' }));
-  app.use(express.urlencoded({ limit: '60mb', extended: true }));
+  // Payload limits for JSON payloads
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
-  const port = process.env.PORT!;
+  const port = process.env.PORT || 3001;
   await app.listen(port, '0.0.0.0'); // Listen on all interfaces
   
-  console.log(`🚀 Server running on port ${port}`);
-  console.log(`Environment: ${process.env.NODE_ENV}`);
+  logger.log(`🚀 Server running on port ${port}`);
+  logger.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
 }
 bootstrap();
