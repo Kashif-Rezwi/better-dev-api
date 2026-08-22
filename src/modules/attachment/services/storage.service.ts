@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { S3Client, PutObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'crypto';
 
 export interface UploadResult {
     url: string;
@@ -144,14 +144,40 @@ export class StorageService {
         return { url, key, size: file.size };
     }
 
-    async delete(key: string): Promise<void> {
+    async getBuffer(keyOrUrl: string): Promise<Buffer> {
         if (this.useS3) {
-            const command = new DeleteObjectCommand({
+            // Strip leading slash or baseUrl if a full URL was passed
+            const key = keyOrUrl.startsWith('http')
+                ? keyOrUrl.replace(/^https?:\/\/[^/]+\//, '')
+                : keyOrUrl.replace(/^\//, '');
+
+            const command = new GetObjectCommand({
                 Bucket: this.bucketName,
                 Key: key,
             });
-            await this.s3Client!.send(command);
-            this.logger.log(`Deleted from S3: ${key}`);
+
+            const response = await this.s3Client!.send(command);
+            const byteArray = await response.Body?.transformToByteArray();
+            return Buffer.from(byteArray || []);
+        } else {
+            const relativePath = keyOrUrl.replace('/uploads/', '').replace(/^\//, '');
+            const filePath = path.join(process.cwd(), this.localStoragePath, relativePath);
+            return fs.readFile(filePath);
+        }
+    }
+
+    async delete(key: string): Promise<void> {
+        if (this.useS3) {
+            try {
+                const command = new DeleteObjectCommand({
+                    Bucket: this.bucketName,
+                    Key: key,
+                });
+                await this.s3Client!.send(command);
+                this.logger.log(`Deleted from S3: ${key}`);
+            } catch (error: any) {
+                this.logger.warn(`Failed to delete S3 file ${key}: ${error.message}`);
+            }
         } else {
             const filePath = path.join(this.localStoragePath, key);
             await fs.unlink(filePath).catch((error) => {
@@ -164,7 +190,7 @@ export class StorageService {
     private generateFileKey(conversationId: string, originalName: string): string {
         const ext = path.extname(originalName);
         const timestamp = Date.now();
-        const uuid = uuidv4().split('-')[0];
+        const uuid = randomUUID().split('-')[0];
         return `conversations/${conversationId}/${timestamp}-${uuid}${ext}`;
     }
 
