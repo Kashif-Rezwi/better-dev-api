@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { UIMessage } from 'ai';
 import { AIService } from '../../core/ai.service';
-import type { EffectiveMode } from './mode.config';
+import type { EffectiveMode } from '../../core/config/mode.config';
 import { ClassificationCacheService } from './classification-cache.service';
-import { MessageUtils } from '../utils/message.utils';
+import { MessageUtils } from '../../core/utils/message.utils';
 
 /**
  * Auto Classifier Service

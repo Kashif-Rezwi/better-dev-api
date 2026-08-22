@@ -1,8 +1,8 @@
 import { IsString, IsNotEmpty, MaxLength } from 'class-validator';
 
-export class SendMessageDto {
+export class GenerateTitleDto {
   @IsString()
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'message must not be empty' })
   @MaxLength(10000)
   message: string;
 }

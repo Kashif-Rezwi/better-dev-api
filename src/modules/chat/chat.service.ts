@@ -3,10 +3,11 @@ import {
   NotFoundException,
   ForbiddenException,
   InternalServerErrorException,
+  HttpException,
   Logger,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { Conversation } from './entities/conversation.entity';
 import { Message, MessageRole } from './entities/message.entity';
 import {
@@ -19,13 +20,14 @@ import { CreateConversationWithMessageDto } from './dto/create-conversation-with
 import { ToolRegistry } from './tools/tool.registry';
 import { ModeResolverService } from './modes/mode-resolver.service';
 import { ConfigService } from '@nestjs/config';
-import { MODE_CONFIG } from './modes/mode.config';
-import * as fs from 'fs/promises';
-import * as path from 'path';
-import type { OperationalMode } from './modes/mode.config';
+import { AttachmentService } from '../attachment/attachment.service';
+import { ExtractionStatus } from '../attachment/entities/attachment.entity';
+import { MODE_CONFIG, type OperationalMode } from '../core/config/mode.config';
 import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
-import { MessageUtils } from './utils/message.utils';
-import { MAX_TOOL_ITERATIONS, CONTENT_PREVIEW_LENGTH } from './constants/chat.constants';
+import { MessageUtils } from '../core/utils/message.utils';
+import { MAX_TOOL_ITERATIONS, CONTENT_PREVIEW_LENGTH } from '../core/constants/ai.constants';
+import { UpdateConversationDto } from './dto/update-conversation.dto';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class ChatService {
@@ -40,6 +42,8 @@ export class ChatService {
     private toolRegistry: ToolRegistry,
     private modeResolver: ModeResolverService,
     private configService: ConfigService,
+    private attachmentService: AttachmentService,
+    private dataSource: DataSource,
   ) { }
 
   // Convert database messages to UIMessage format for AI SDK
@@ -50,20 +54,13 @@ export class ChatService {
       order: { createdAt: 'ASC' },
     });
 
-    // 2. Fetch all attachments for this conversation
-    // Use the metadata to find the entity name to avoid circular dependency issues
-    const rawAttachments = await this.messageRepository.manager.createQueryBuilder()
-      .select('a')
-      .from('attachments', 'a')
-      .where('a.conversationId = :conversationId', { conversationId })
-      .getRawMany();
+    // 2. Fetch all attachments for this conversation via AttachmentService
+    const attachments = await this.attachmentService.getAttachmentsForConversation(conversationId);
 
     // Convert to a Map for O(1) lookup
     const attachmentMap = new Map<string, any>();
-    rawAttachments.forEach(a => {
-      // Handle potential prefixing from raw query result if using getRawMany
-      const id = (a.id || a.a_id || '').toString();
-      if (id) attachmentMap.set(id, a);
+    attachments.forEach(a => {
+      if (a.id) attachmentMap.set(a.id.toString(), a);
     });
 
     this.logger.debug(`[DEBUG] Pre-fetched ${attachmentMap.size} attachments for conversation ${conversationId}`);
@@ -101,7 +98,7 @@ export class ChatService {
 
               // For files: Inject extracted text context
               if (part.type === 'file') {
-                if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
+                if (normalizedAttachment.extractionStatus === ExtractionStatus.SUCCESS || normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
                   const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
                   const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
                   const maxDocChars = maxDocTokens * charsPerToken;
@@ -115,7 +112,7 @@ export class ChatService {
                     ...part,
                     text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
                   };
-                } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
+                } else if (normalizedAttachment.extractionStatus === ExtractionStatus.PROCESSING || normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
                   return {
                     ...part,
                     text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
@@ -182,16 +179,7 @@ export class ChatService {
         .map((part: any) => part.attachmentId);
 
       if (attachmentIds.length > 0) {
-        // We need to import the repository here or use query builder
-        // For simplicity, let's use the connection/dataSource to update
-        await this.messageRepository.manager
-          .createQueryBuilder()
-          .update('attachments')
-          .set({ messageId: savedMessage.id })
-          .where('id IN (:...ids)', { ids: attachmentIds })
-          .execute();
-        
-        this.logger.debug(`Linked ${attachmentIds.length} attachments to message ${savedMessage.id}`);
+        await this.attachmentService.linkAttachmentsToMessage(savedMessage.id, attachmentIds);
       }
     }
 
@@ -318,6 +306,9 @@ export class ChatService {
         },
       });
     } catch (error: any) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       throw new InternalServerErrorException(
         `Chat streaming failed: ${error.message}`,
         { cause: error }
@@ -327,7 +318,7 @@ export class ChatService {
 
   // Generate unique message ID
   private generateMessageId(): string {
-    return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `msg-${Date.now()}-${randomUUID().split('-')[0]}`;
   }
 
   // Resolve local image URLs to Base64 for the AI provider
@@ -352,26 +343,17 @@ export class ChatService {
       // Create a shallow copy of the message and deep copy parts
       const updatedParts = await Promise.all(msg.parts.map(async (part: any) => {
         if (part.type === 'image' && (part.url || part.image) && (part.url?.startsWith('/uploads/') || part.image?.startsWith('/uploads/'))) {
-          try {
-            const url = part.url || part.image;
-            const relativePath = url.replace('/uploads/', '');
-            const uploadsPath = this.configService.get<string>('LOCAL_STORAGE_PATH') || './uploads';
-            const filePath = path.join(process.cwd(), uploadsPath, relativePath);
-            
-            this.logger.log(`[DEBUG] Attempting to read file: ${filePath}`);
-            const buffer = await fs.readFile(filePath);
-            const mimeType = part.mimeType || 'image/jpeg';
-            const base64 = buffer.toString('base64');
-            
-            this.logger.log(`[DEBUG] Successfully resolved local image to base64: ${filePath.substring(0, 50)}...`);
+          const url = part.url || part.image;
+          const mimeType = part.mimeType || 'image/jpeg';
+          const base64Data = await this.attachmentService.resolveImageBase64(url, mimeType);
+
+          if (base64Data) {
             return {
               ...part,
-              image: `data:${mimeType};base64,${base64}`,
+              image: base64Data,
             };
-          } catch (error) {
-            this.logger.error(`[DEBUG] Failed to resolve local image: ${error.message}`);
-            return part;
           }
+          return part;
         }
         return part;
       }));
@@ -394,6 +376,32 @@ export class ChatService {
     const conversation = await this.verifyOwnership(conversationId, userId);
 
     conversation.systemPrompt = systemPrompt;
+    const updated = await this.conversationRepository.save(conversation);
+
+    return new ConversationResponseDto({
+      id: updated.id,
+      title: updated.title,
+      systemPrompt: updated.systemPrompt,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    });
+  }
+
+  // Update conversation (title, systemPrompt)
+  async updateConversation(
+    conversationId: string,
+    userId: string,
+    dto: UpdateConversationDto,
+  ): Promise<ConversationResponseDto> {
+    const conversation = await this.verifyOwnership(conversationId, userId);
+
+    if (dto.title !== undefined) {
+      conversation.title = dto.title;
+    }
+    if (dto.systemPrompt !== undefined) {
+      conversation.systemPrompt = dto.systemPrompt;
+    }
+
     const updated = await this.conversationRepository.save(conversation);
 
     return new ConversationResponseDto({
@@ -584,11 +592,11 @@ export class ChatService {
       metadata,
     });
 
-    await this.messageRepository.save(dbMessage);
-
-    // Update conversation timestamp
-    await this.conversationRepository.update(conversationId, {
-      updatedAt: new Date(),
+    await this.dataSource.transaction(async (manager) => {
+      await manager.save(Message, dbMessage);
+      await manager.update(Conversation, conversationId, {
+        updatedAt: new Date(),
+      });
     });
   }
 
@@ -638,42 +646,41 @@ export class ChatService {
     dto: CreateConversationWithMessageDto,
   ) {
     try {
-      // 1. Create conversation
-      const conversation = this.conversationRepository.create({
-        userId,
-        title: dto.title || 'Untitled',
-        systemPrompt: dto.systemPrompt,
+      return await this.dataSource.transaction(async (manager) => {
+        // 1. Create conversation
+        const conversation = manager.create(Conversation, {
+          userId,
+          title: dto.title || 'Untitled',
+          systemPrompt: dto.systemPrompt,
+        });
+
+        const savedConversation = await manager.save(Conversation, conversation);
+
+        // 2. Create and save user message
+        const parts = dto.parts || [{ type: 'text', text: dto.firstMessage }];
+
+        const userMessage = manager.create(Message, {
+          conversationId: savedConversation.id,
+          role: MessageRole.USER,
+          content: dto.firstMessage,
+          parts: parts as any,
+        });
+
+        await manager.save(Message, userMessage);
+
+        // 3. Return conversation data (the frontend will handle streaming on navigation)
+        return {
+          id: savedConversation.id,
+          title: savedConversation.title,
+          systemPrompt: savedConversation.systemPrompt,
+          createdAt: savedConversation.createdAt,
+          updatedAt: savedConversation.updatedAt,
+        };
       });
-
-      const savedConversation = await this.conversationRepository.save(conversation);
-
-      // 2. Create and save user message
-      // Construct parts: use provided parts or fallback to text part from firstMessage
-      const parts = dto.parts || [{ type: 'text', text: dto.firstMessage }];
-
-      const userMessage = this.messageRepository.create({
-        conversationId: savedConversation.id,
-        role: MessageRole.USER,
-        content: dto.firstMessage,
-        parts: parts as any, // Cast for compatibility
-      });
-
-      await this.messageRepository.save(userMessage);
-
-      // 3. Update conversation timestamp
-      await this.conversationRepository.update(savedConversation.id, {
-        updatedAt: new Date(),
-      });
-
-      // 4. Return conversation data (the frontend will handle streaming on navigation)
-      return {
-        id: savedConversation.id,
-        title: savedConversation.title,
-        systemPrompt: savedConversation.systemPrompt,
-        createdAt: savedConversation.createdAt,
-        updatedAt: savedConversation.updatedAt,
-      };
-    } catch (error) {
+    } catch (error: any) {
+      if (error instanceof HttpException) {
+        throw error;
+      }
       throw new InternalServerErrorException(
         `Failed to create conversation with message: ${error.message}`,
         { cause: error }

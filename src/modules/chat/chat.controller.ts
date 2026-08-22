@@ -6,19 +6,25 @@ import {
   Body,
   Param,
   UseGuards,
-  Req,
   Res,
+  Req,
   HttpCode,
   HttpStatus,
   Put,
+  Patch,
+  ParseUUIDPipe,
 } from '@nestjs/common';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import { ChatService } from './chat.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import type { AuthUser } from '../../common/interfaces/auth-user.interface';
 import { ChatRequestDto } from './dto/chat-request.dto';
+import { GenerateTitleDto } from './dto/generate-title.dto';
 import type { UIMessage } from 'ai';
 import { UpdateSystemPromptDto } from './dto/update-system-prompt.dto';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
+import { UpdateConversationDto } from './dto/update-conversation.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
@@ -27,50 +33,62 @@ export class ChatController {
 
   @Post('conversations/with-message')
   async createConversationWithMessage(
-    @Req() req,
+    @CurrentUser() user: AuthUser,
     @Body() dto: CreateConversationWithMessageDto,
   ) {
-    // Create conversation with the first message saved
-    const result = await this.chatService.createConversationWithFirstMessage(
-      req.user.userId,
+    return this.chatService.createConversationWithFirstMessage(
+      user.userId,
       dto,
     );
-
-    // Return conversation data as JSON (no streaming)
-    return result;
   }
 
   @Get('conversations')
-  async getConversations(@Req() req) {
-    return this.chatService.getUserConversations(req.user.userId);
+  async getConversations(@CurrentUser() user: AuthUser) {
+    return this.chatService.getUserConversations(user.userId);
   }
 
   @Get('conversations/:id')
-  async getConversation(@Req() req, @Param('id') id: string) {
-    return this.chatService.getConversation(id, req.user.userId);
+  async getConversation(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    return this.chatService.getConversation(id, user.userId);
   }
 
   @Delete('conversations/:id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async deleteConversation(@Req() req, @Param('id') id: string) {
-    await this.chatService.deleteConversation(id, req.user.userId);
+  async deleteConversation(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+  ) {
+    await this.chatService.deleteConversation(id, user.userId);
+  }
+
+  @Patch('conversations/:id')
+  async updateConversation(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateConversationDto,
+  ) {
+    return this.chatService.updateConversation(id, user.userId, dto);
   }
 
   // AI SDK v5 Compatible Endpoint
   // Accepts UIMessages and returns SSE stream
   @Post('conversations/:id/messages')
   async sendMessage(
-    @Req() req,
-    @Param('id') conversationId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) conversationId: string,
     @Body() chatRequest: ChatRequestDto,
+    @Req() req: Request,
     @Res() res: Response,
   ) {
     // Get the AI SDK v5 Response object from service
     const streamResponse = await this.chatService.handleStreamingResponse(
       conversationId,
-      req.user.userId,
-      chatRequest.messages as UIMessage[],
-      chatRequest.modeOverride,  // Pass mode override
+      user.userId,
+      chatRequest.messages as unknown as UIMessage[],
+      chatRequest.modeOverride,
     );
 
     // Copy headers from AI SDK response to Express response
@@ -81,9 +99,13 @@ export class ChatController {
     // Set status code
     res.status(streamResponse.status);
 
-    // Stream the body
+    // Stream the body with client disconnect listener
     if (streamResponse.body) {
       const reader = streamResponse.body.getReader();
+
+      req.on('close', () => {
+        reader.cancel().catch(() => {});
+      });
 
       try {
         while (true) {
@@ -102,14 +124,14 @@ export class ChatController {
   // Generate title endpoint
   @Post('conversations/:id/generate-title')
   async generateTitle(
-    @Req() req,
-    @Param('id') conversationId: string,
-    @Body() body: { message: string },
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) conversationId: string,
+    @Body() dto: GenerateTitleDto,
   ) {
     const title = await this.chatService.generateTitle(
       conversationId,
-      req.user.userId,
-      body.message,
+      user.userId,
+      dto.message,
     );
 
     return { title };
@@ -117,13 +139,13 @@ export class ChatController {
 
   @Put('conversations/:id/system-prompt')
   async updateSystemPrompt(
-    @Req() req,
-    @Param('id') conversationId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) conversationId: string,
     @Body() body: UpdateSystemPromptDto,
   ) {
     return this.chatService.updateSystemPrompt(
       conversationId,
-      req.user.userId,
+      user.userId,
       body.systemPrompt,
     );
   }

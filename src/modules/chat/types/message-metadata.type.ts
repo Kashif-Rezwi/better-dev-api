@@ -1,4 +1,4 @@
-import type { OperationalMode, EffectiveMode } from '../modes/mode.config';
+import type { OperationalMode, EffectiveMode } from '../../core/config/mode.config';
 
 /**
  * Tool call metadata

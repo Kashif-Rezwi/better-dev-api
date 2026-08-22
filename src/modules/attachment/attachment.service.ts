@@ -8,6 +8,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Attachment, FileType, ExtractionStatus } from './entities/attachment.entity';
+import { Conversation } from '../chat/entities/conversation.entity';
 import { StorageService } from './services/storage.service';
 import { FileProcessorService } from './services/file-processor.service';
 import { ConfigService } from '@nestjs/config';
@@ -20,6 +21,8 @@ export class AttachmentService {
     constructor(
         @InjectRepository(Attachment)
         private attachmentRepository: Repository<Attachment>,
+        @InjectRepository(Conversation)
+        private conversationRepository: Repository<Conversation>,
         private storageService: StorageService,
         private fileProcessorService: FileProcessorService,
         private configService: ConfigService,
@@ -31,6 +34,20 @@ export class AttachmentService {
         messageId: string | undefined,
         userId: string,
     ): Promise<Attachment> {
+        // 1. Verify that conversation exists and belongs to the user
+        const conversation = await this.conversationRepository.findOne({
+            where: { id: conversationId },
+            select: ['id', 'userId'],
+        });
+
+        if (!conversation) {
+            throw new NotFoundException(`Conversation ${conversationId} not found`);
+        }
+
+        if (conversation.userId !== userId) {
+            throw new ForbiddenException('Access denied to this conversation');
+        }
+
         this.logger.log(
             `Uploading file: ${file.originalname} (${file.size} bytes) for conversation ${conversationId}`,
         );
@@ -136,8 +153,32 @@ export class AttachmentService {
         }
     }
 
-    async getById(id: string): Promise<Attachment | null> {
-        return this.attachmentRepository.findOne({ where: { id } });
+    async getAttachmentsForConversation(conversationId: string): Promise<Attachment[]> {
+        return this.attachmentRepository.find({
+            where: { conversationId },
+        });
+    }
+
+    async linkAttachmentsToMessage(messageId: string, attachmentIds: string[]): Promise<void> {
+        if (!attachmentIds || attachmentIds.length === 0) return;
+        await this.attachmentRepository
+            .createQueryBuilder()
+            .update(Attachment)
+            .set({ messageId })
+            .where('id IN (:...ids)', { ids: attachmentIds })
+            .execute();
+        this.logger.debug(`Linked ${attachmentIds.length} attachments to message ${messageId}`);
+    }
+
+    async resolveImageBase64(urlOrPath: string, mimeType: string = 'image/jpeg'): Promise<string | null> {
+        try {
+            const buffer = await this.storageService.getBuffer(urlOrPath);
+            const base64 = buffer.toString('base64');
+            return `data:${mimeType};base64,${base64}`;
+        } catch (error: any) {
+            this.logger.error(`Failed to resolve image to base64 for ${urlOrPath}: ${error.message}`);
+            return null;
+        }
     }
 
     async getAttachment(id: string, userId: string): Promise<Attachment> {

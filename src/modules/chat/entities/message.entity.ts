@@ -6,6 +6,7 @@ import {
   ManyToOne,
   OneToMany,
   JoinColumn,
+  Index,
 } from 'typeorm';
 import { Conversation } from './conversation.entity';
 import type { MessageMetadata } from '../types/message-metadata.type';
@@ -54,6 +55,7 @@ export interface MessagePart {
 }
 
 @Entity('messages')
+@Index(['conversationId', 'createdAt'])
 export class Message {
   @PrimaryGeneratedColumn('uuid')
   id: string;

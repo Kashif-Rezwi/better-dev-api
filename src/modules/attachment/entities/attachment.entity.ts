@@ -6,8 +6,8 @@ import {
     UpdateDateColumn,
     ManyToOne,
     JoinColumn,
+    Index,
 } from 'typeorm';
-import { Message } from '../../chat/entities/message.entity';
 import { Conversation } from '../../chat/entities/conversation.entity';
 
 export enum FileType {
@@ -26,6 +26,8 @@ export enum ExtractionStatus {
 }
 
 @Entity('attachments')
+@Index(['conversationId'])
+@Index(['messageId'])
 export class Attachment {
     @PrimaryGeneratedColumn('uuid')
     id: string;

@@ -1,5 +1,5 @@
 /**
- * Configuration constants for the chat service
+ * Configuration constants for the AI core and chat services
  */
 
 /**

@@ -10,9 +10,9 @@ import {
   convertToModelMessages,
   type UIMessage,
 } from 'ai';
-import { MODE_CONFIG, type EffectiveMode } from '../chat/modes/mode.config';
-import { MessageUtils } from '../chat/utils/message.utils';
-import { WEB_SEARCH_HISTORY_DEPTH } from '../chat/constants/chat.constants';
+import { MODE_CONFIG, type EffectiveMode } from './config/mode.config';
+import { MessageUtils } from './utils/message.utils';
+import { WEB_SEARCH_HISTORY_DEPTH } from './constants/ai.constants';
 import { getIntentAnalysisPrompt, getModeSystemPrompt } from './prompts';
 import { loadAllModels, logLoadedModels, type ModelInfo } from './utils/model-loader.util';
 import { getModelInstance } from './utils/model-instance.util';
@@ -234,44 +234,7 @@ export class AIService {
     }
   }
 
-  // Stream response with tool support
-  streamResponse(
-    messages: UIMessage[],
-    tools?: Record<string, any>,
-    maxSteps: number = 5,
-  ) {
-    try {
-      const modelMessages = convertToModelMessages(messages);
 
-      // Check if tools are provided
-      const hasTools = tools && Object.keys(tools).length > 0;
-
-      // If we have tools, use the tool-calling model, If not, use the fast text model.
-      const modelToUse = hasTools ? this.toolModel : this.textModel;
-
-      this.logger.log(`Streaming with model: ${modelToUse.name} [${modelToUse.provider}]`);
-
-      const config: any = {
-        model: getModelInstance(modelToUse.name, modelToUse.provider),
-        messages: modelMessages,
-        temperature: 0.7,
-        maxTokens: 2000,
-      };
-
-      // Add tools if provided
-      if (hasTools) {
-        config.tools = tools;
-        config.maxSteps = maxSteps;
-      }
-
-      return streamText(config);
-    } catch (error: any) {
-      throw new InternalServerErrorException(
-        `AI streaming error: ${error.message}`,
-        { cause: error },
-      );
-    }
-  }
 
   // Generate non-streaming response
   async generateResponse(messages: UIMessage[]) {
