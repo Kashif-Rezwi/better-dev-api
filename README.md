@@ -208,7 +208,8 @@ better-dev-api/
 
 ### Base URL
 - **Local**: `http://localhost:3001`
-- **Production**: `https://better-dev-api.onrender.com`
+- **Production API**: `https://better-dev-api.onrender.com`
+- **Live Health Check**: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health)
 
 ---
 
@@ -486,7 +487,7 @@ npm run test:cov
 
 The production stack runs on fully managed cloud infrastructure:
 
-- **Web API Service**: [Render](https://render.com) (Node.js 20 native runtime, health check `GET /health`).
+- **Web API Service**: [Render](https://render.com) (Node.js 20 native runtime, health check: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health)).
 - **Database**: [Neon](https://neon.tech) Serverless PostgreSQL 16.
 - **Object Storage**: [Cloudflare R2](https://www.cloudflare.com/developer-platform/r2/) / S3-compatible storage with zero egress fees.
-- **Frontend UI**: [Vercel](https://vercel.com) (`https://better-dev-ui-kashifrezwis-projects.vercel.app`).
+- **Frontend UI**: [Vercel](https://vercel.com) ([better-dev-ui.vercel.app](https://better-dev-ui.vercel.app)).
