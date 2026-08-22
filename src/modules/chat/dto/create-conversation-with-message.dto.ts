@@ -16,8 +16,7 @@ import { Type } from 'class-transformer';
 export class MessagePartDto {
   @IsString()
   @IsNotEmpty()
-  @IsIn(['text', 'image', 'file', 'tool-call', 'tool-result', 'reasoning'])
-  type: 'text' | 'image' | 'file' | 'tool-call' | 'tool-result' | 'reasoning';
+  type: string;
 
   @IsString()
   @IsOptional()

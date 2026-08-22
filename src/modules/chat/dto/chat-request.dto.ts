@@ -9,7 +9,6 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import type { OperationalMode } from '../../core/config/mode.config';
-import { MessagePartDto } from './create-conversation-with-message.dto';
 
 export class UIMessageInputDto {
   @IsString()
@@ -22,9 +21,7 @@ export class UIMessageInputDto {
 
   @IsOptional()
   @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => MessagePartDto)
-  parts?: MessagePartDto[];
+  parts?: Array<Record<string, any>>;
 
   @IsOptional()
   @IsString()

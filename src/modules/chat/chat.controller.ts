@@ -11,6 +11,7 @@ import {
   HttpCode,
   HttpStatus,
   Put,
+  Patch,
   ParseUUIDPipe,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
@@ -23,6 +24,7 @@ import { GenerateTitleDto } from './dto/generate-title.dto';
 import type { UIMessage } from 'ai';
 import { UpdateSystemPromptDto } from './dto/update-system-prompt.dto';
 import { CreateConversationWithMessageDto } from './dto/create-conversation-with-message.dto';
+import { UpdateConversationDto } from './dto/update-conversation.dto';
 
 @Controller('chat')
 @UseGuards(JwtAuthGuard)
@@ -60,6 +62,15 @@ export class ChatController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     await this.chatService.deleteConversation(id, user.userId);
+  }
+
+  @Patch('conversations/:id')
+  async updateConversation(
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateConversationDto,
+  ) {
+    return this.chatService.updateConversation(id, user.userId, dto);
   }
 
   // AI SDK v5 Compatible Endpoint

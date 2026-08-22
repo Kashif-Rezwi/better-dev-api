@@ -21,10 +21,13 @@ import { ToolRegistry } from './tools/tool.registry';
 import { ModeResolverService } from './modes/mode-resolver.service';
 import { ConfigService } from '@nestjs/config';
 import { AttachmentService } from '../attachment/attachment.service';
+import { ExtractionStatus } from '../attachment/entities/attachment.entity';
 import { MODE_CONFIG, type OperationalMode } from '../core/config/mode.config';
 import type { MessageMetadata, ToolCallMetadata } from './types/message-metadata.type';
 import { MessageUtils } from '../core/utils/message.utils';
 import { MAX_TOOL_ITERATIONS, CONTENT_PREVIEW_LENGTH } from '../core/constants/ai.constants';
+import { UpdateConversationDto } from './dto/update-conversation.dto';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class ChatService {
@@ -95,7 +98,7 @@ export class ChatService {
 
               // For files: Inject extracted text context
               if (part.type === 'file') {
-                if (normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
+                if (normalizedAttachment.extractionStatus === ExtractionStatus.SUCCESS || normalizedAttachment.extractionStatus === 'success' || normalizedAttachment.extractionStatus === 'SUCCESS') {
                   const maxDocTokens = this.configService.get<number>('tokenLimits.maxDocumentTokens') || 32000;
                   const charsPerToken = this.configService.get<number>('tokenLimits.charsPerToken') || 4;
                   const maxDocChars = maxDocTokens * charsPerToken;
@@ -109,7 +112,7 @@ export class ChatService {
                     ...part,
                     text: `\n\n[File Content: ${normalizedAttachment.fileName}]:\n${truncatedText}`
                   };
-                } else if (normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
+                } else if (normalizedAttachment.extractionStatus === ExtractionStatus.PROCESSING || normalizedAttachment.extractionStatus === 'processing' || normalizedAttachment.extractionStatus === 'PROCESSING') {
                   return {
                     ...part,
                     text: `\n\n[System: I am currently reading the file "${normalizedAttachment.fileName}". Please wait a moment.]`
@@ -315,7 +318,7 @@ export class ChatService {
 
   // Generate unique message ID
   private generateMessageId(): string {
-    return `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    return `msg-${Date.now()}-${randomUUID().split('-')[0]}`;
   }
 
   // Resolve local image URLs to Base64 for the AI provider
@@ -373,6 +376,32 @@ export class ChatService {
     const conversation = await this.verifyOwnership(conversationId, userId);
 
     conversation.systemPrompt = systemPrompt;
+    const updated = await this.conversationRepository.save(conversation);
+
+    return new ConversationResponseDto({
+      id: updated.id,
+      title: updated.title,
+      systemPrompt: updated.systemPrompt,
+      createdAt: updated.createdAt,
+      updatedAt: updated.updatedAt,
+    });
+  }
+
+  // Update conversation (title, systemPrompt)
+  async updateConversation(
+    conversationId: string,
+    userId: string,
+    dto: UpdateConversationDto,
+  ): Promise<ConversationResponseDto> {
+    const conversation = await this.verifyOwnership(conversationId, userId);
+
+    if (dto.title !== undefined) {
+      conversation.title = dto.title;
+    }
+    if (dto.systemPrompt !== undefined) {
+      conversation.systemPrompt = dto.systemPrompt;
+    }
+
     const updated = await this.conversationRepository.save(conversation);
 
     return new ConversationResponseDto({
