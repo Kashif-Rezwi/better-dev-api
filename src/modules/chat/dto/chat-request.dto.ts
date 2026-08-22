@@ -1,10 +1,42 @@
-import { IsArray, IsOptional, IsEnum, ArrayNotEmpty } from 'class-validator';
-import type { OperationalMode } from '../modes/mode.config';
+import {
+  IsArray,
+  IsOptional,
+  IsEnum,
+  ArrayNotEmpty,
+  ValidateNested,
+  IsString,
+  IsIn,
+} from 'class-validator';
+import { Type } from 'class-transformer';
+import type { OperationalMode } from '../../core/config/mode.config';
+import { MessagePartDto } from './create-conversation-with-message.dto';
+
+export class UIMessageInputDto {
+  @IsString()
+  @IsOptional()
+  id?: string;
+
+  @IsString()
+  @IsIn(['user', 'assistant', 'system'])
+  role: 'user' | 'assistant' | 'system';
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => MessagePartDto)
+  parts?: MessagePartDto[];
+
+  @IsOptional()
+  @IsString()
+  content?: string;
+}
 
 export class ChatRequestDto {
   @IsArray()
   @ArrayNotEmpty({ message: 'messages must contain at least one message' })
-  messages: any[];
+  @ValidateNested({ each: true })
+  @Type(() => UIMessageInputDto)
+  messages: UIMessageInputDto[];
 
   @IsOptional()
   @IsEnum(['fast', 'thinking', 'auto'], {
