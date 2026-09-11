@@ -1,49 +1,26 @@
-# Better DEV AI Backend
+# Better DEV API
 
-> Core server and API for Better DEV, an intelligent, multi-modal AI chat platform with tool-calling capabilities, file processing (OCR & document extraction), dynamic operational modes, and real-time streaming responses.
+> Backend service for Better DEV, a multi-modal AI chat platform with real-time streaming responses, tool calling, file processing, and conversation management.
 
 [![NestJS](https://img.shields.io/badge/NestJS-11-E0234E?style=flat&logo=nestjs&logoColor=white)](https://nestjs.com/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-336791?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-336791?style=flat&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![TypeORM](https://img.shields.io/badge/TypeORM-0.3-FE0803?style=flat&logo=typeorm&logoColor=white)](https://typeorm.io/)
-[![AI SDK](https://img.shields.io/badge/Vercel_AI_SDK-v5-black?style=flat&logo=vercel&logoColor=white)](https://sdk.vercel.ai/)
+[![Vercel AI SDK](https://img.shields.io/badge/Vercel_AI_SDK-v5-black?style=flat&logo=vercel&logoColor=white)](https://sdk.vercel.ai/)
+[![Groq](https://img.shields.io/badge/Groq-F55036?style=flat)](https://groq.com/)
 
----
+## Overview
 
-## 📋 Table of Contents
+Better DEV API is a NestJS 11 application that powers the [Better DEV UI](https://github.com/Kashif-Rezwi/better-dev-ui), a multi-modal AI chat platform. It streams LLM responses, executes autonomous web search, extracts text from uploaded documents and images, and persists conversations per user.
 
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Features](#-features)
-- [Tech Stack](#-tech-stack)
-- [Project Structure](#-project-structure)
-- [API Documentation](#-api-documentation)
-- [Operational Modes](#-operational-modes)
-- [Tool System](#-tool-system)
-- [Multi-Modal & File Processing Pipeline](#-multi-modal--file-processing-pipeline)
-- [Environment Variables](#-environment-variables)
-- [Getting Started](#-getting-started)
-- [Testing](#-testing)
-- [Deployment & Infrastructure](#-deployment--infrastructure)
+- **Streaming chat** over Server-Sent Events (SSE) using Vercel AI SDK v5.
+- **Operational modes** — Fast, Thinking, Auto (LLM-classified), plus a Vision-effective mode when images are attached.
+- **Tool calling** — a Zod-validated Tavily web search tool with AI-generated summaries and inline citations.
+- **File processing** — OCR (Tesseract.js), PDF text extraction, DOCX extraction, and image thumbnails (Sharp), with S3-compatible object storage.
+- **Stateless JWT auth** with bcrypt password hashing and a typed `@CurrentUser()` request context.
+- **Reliability** — uniform JSON error responses, request logging, transactional multi-table writes, and composite database indexes.
 
----
-
-## 🌟 Overview
-
-Better DEV AI Backend is a production-ready NestJS 11 application powering an intelligent multi-modal conversational AI system. It provides:
-
-- **Real-time AI Conversations** with Server-Sent Events (SSE) streaming using Vercel AI SDK v5.
-- **Multi-Modal Document & Image Processing** with Tesseract OCR, PDF parsing, Word document text extraction, and Supabase Object Storage (S3-compatible).
-- **Intelligent Tool Execution** with autonomous web search query intent analysis powered by Tavily.
-- **Dynamic Operational Modes** (Fast, Thinking, Vision, Auto-Classifier with 5-minute MD5 query caching).
-- **Enterprise-Grade Reliability**: Global exception formatting, structured latency logging interceptor, transaction boundaries for multi-table writes, and composite database indexing.
-- **Stateless JWT Authentication** with bcrypt password hashing and strongly typed `@CurrentUser()` request context.
-
----
-
-## 🏗️ Architecture
-
-### High-Level Design (HLD)
+## Architecture
 
 ```mermaid
 graph TD
@@ -56,22 +33,22 @@ graph TD
     subgraph Security_Middleware["Security & Middleware Layer"]
         Guard["JwtAuthGuard + @CurrentUser()"]
         Filter["GlobalExceptionFilter (Uniform JSON Errors)"]
-        Logging["LoggingInterceptor (Latency & Status)"]
+        Logging["LoggingInterceptor (Method, URL, Latency)"]
         Validation["ValidationPipe (Whitelist + Transform)"]
     end
 
     subgraph Domain_Modules["Domain Modules"]
         AuthM["AuthModule<br/>(JWT, Password Hashing)"]
-        UserM["UserModule<br/>(User Account Management)"]
+        UserM["UserModule<br/>(User Accounts)"]
         AttachM["AttachmentModule<br/>(Storage, OCR, Ownership)"]
-        ChatM["ChatModule<br/>(Conversation Lifecycle, SSE)"]
-        ModesM["ModesModule<br/>(Auto-Classification, Caching)"]
-        CoreM["CoreModule (@Global)<br/>(AIService, Provider Config)"]
+        ChatM["ChatModule<br/>(Conversations, SSE, Tools)"]
+        ModesM["ModesModule<br/>(Auto-Classification, MD5 Cache)"]
+        CoreM["CoreModule (@Global)<br/>(AIService, Model & Provider Config)"]
     end
 
     subgraph Data_Storage["Data & Storage Infrastructure"]
         Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Composite Indexes)")]
-        Storage[("Object Storage<br/>(Supabase Storage S3 / Local)")]
+        Storage[("S3-compatible Object Storage<br/>(Supabase Storage / Local)")]
     end
 
     UI_Upload --> Guard --> Validation --> AttachM
@@ -89,405 +66,271 @@ graph TD
     ModesM --> CoreM
 ```
 
----
+### Request flow (chat)
 
-## ✨ Features
+```text
+User message
+  ↓
+ChatController (SSE response)
+  ↓
+ChatService: load history + attachments, verify ownership
+  ↓
+ModeResolver → AutoClassifier (heuristic pre-filter → LLM → 5-min MD5 cache)
+  ↓
+AIService: system prompt + history + file text, image cap applied
+  ↓
+AI SDK v5 streamText (Groq) — tools available
+  ↓
+Tool iterations (max 5) → Tavily search → summary with citations
+  ↓
+SSE delta stream → client disconnect cancels via req.on('close')
+  ↓
+Assistant message persisted (transaction) with mode/tool metadata
+```
 
-### 1. Multi-Modal Chat & Streaming
-- **AI SDK v5 Compatible SSE Streaming**: Real-time response streaming with client disconnection cancellation listeners (`req.on('close')`).
-- **Vision History Window**: Detects images in chat history and keeps visual data for the most recent 3 user messages to avoid model token limits.
-- **O(1) Map-Based Context Enrichment**: Pre-fetches conversation attachments into an in-memory `Map` to inject extracted document text without $O(N^2)$ array lookups.
-- **Subquery Batching**: `getUserConversations` fetches conversation metadata and latest message previews in a single `DISTINCT ON` query.
+## Features
 
-### 2. Operational Modes
-- **Fast Mode**: Low latency, lightweight text generation with `llama-3.1-8b-instant` (500 tokens, 0.5 temperature).
-- **Thinking Mode**: High-reasoning model with `llama-3.3-70b-versatile` (4000 tokens, 0.7 temperature).
-- **Vision Mode**: Auto-detected visual model (`meta-llama/llama-4-scout-17b-16e-instruct` or configured vision model) when image attachments are present.
-- **Auto Mode**: Evaluates query complexity via fast heuristic pre-filtering and LLM analysis, cached for 5 minutes via in-memory MD5 cache.
+### 1. Chat & streaming
 
-### 3. File Processing & Object Storage
-- **Unified Storage Driver**: Provider-agnostic S3-compatible storage driver (Supabase Object Storage via the AWS S3 SDK) with native `crypto.randomUUID()` and local-disk fallback.
-- **In-Process Content Extraction**:
-  - Images: OCR text extraction via Tesseract.js and thumbnail generation via Sharp.
-  - PDFs: Text extraction via `pdf-parse`.
-  - Documents: Word `.docx` parsing via `mammoth`.
-- **Ownership Verification**: Enforces that users can only attach files to conversations they own.
+- **SSE streaming** with client-disconnect cancellation (`req.on('close')` → `reader.cancel()`).
+- **Vision-effective mode**: when message parts contain images, the effective mode switches to `vision` automatically.
+- **Image context cap**: image parts are capped (currently 5 images); older images are replaced with `[Previous Image Omitted]` to respect model token limits.
+- **O(1) attachment enrichment**: conversation attachments are pre-fetched into a `Map` and extracted document text is injected into the message context without repeated lookups.
+- **Batched conversation previews**: `getUserConversations` returns metadata plus the latest message preview in a single `DISTINCT ON` query.
 
-### 4. Enterprise Architecture & Reliability
-- **Transactional Consistency**: Multi-table operations execute within `dataSource.transaction(...)`.
-- **Database Indexing**: Composite indexes on `(conversationId, createdAt ASC)` and `(userId, updatedAt DESC)` prevent sequential scans.
-- **Global Error Envelope**: Uniform JSON error responses across all endpoints.
+### 2. Operational modes
 
----
+| Mode | Model (default, env-overridable) | Max tokens | Temperature | Behavior |
+| :--- | :--- | :---: | :---: | :--- |
+| Fast | `AI_TEXT_MODEL` → `openai/gpt-oss-20b` | 500 | 0.5 | Terse, direct answers |
+| Thinking | `AI_TOOL_MODEL` → `openai/gpt-oss-120b` | 4000 | 0.7 | Detailed, step-by-step |
+| Vision | `AI_VISION_MODEL` → `openai/gpt-oss-120b` | 2000 | 0.6 | Image-focused prompting; images are read via server-side OCR text because no vision-capable model is available on the current Groq tier |
 
-## 🛠️ Tech Stack
+**Auto mode** classifies query complexity with a short-query heuristic (< 15 chars → Fast), then an LLM classification call with a 5-second timeout (fallback: Fast). Results are cached in memory by MD5 of the last user message for 5 minutes (FIFO cap of 1,000 entries, cleanup every minute).
+
+### 3. Tool system
+
+- **Registry**: tools register by unique lowercase/underscore name with a Zod parameter schema, validated at startup (converted to OpenAPI 3.0 for the AI SDK).
+- **Registered tool**: `tavily_web_search` (query: 1–500 chars, `maxResults`: 1–10) with automatic retry and backoff.
+- **Intent analysis**: before tool use, a lightweight LLM call decides whether the query needs live web data; recent searches in history (last 3 turns) suppress redundant searches.
+- **Search summaries**: a separate text-model call synthesizes results into a short summary with `[n]` citation markers linked to sources.
+- Tool call iterations are capped (currently 5 steps) to prevent runaway loops.
+
+### 4. File processing & storage
+
+- **Uploads** via Multer: images (JPEG/PNG/GIF/WebP), PDFs, and Word documents; a 10 MB limit is enforced by configuration (`MAX_UPLOAD_SIZE_BYTES`).
+- **In-process extraction** (async after upload): Tesseract.js OCR + Sharp thumbnail (images), `pdf-parse` (PDF), `mammoth` (DOCX).
+- **Ownership enforcement**: attachments can only be added to conversations owned by the authenticated user.
+- **Provider-agnostic storage driver** built on the AWS S3 SDK v3 — currently Supabase Object Storage (S3-compatible, path-style), with a local-disk fallback for development. Also compatible with Cloudflare R2 and DigitalOcean Spaces via configuration.
+
+### 5. API quality
+
+- Global exception filter producing a uniform `{ statusCode, error, message, timestamp, path, method }` envelope.
+- Logging interceptor emitting `[METHOD] url status - durationms`.
+- `ValidationPipe` with whitelisting and DTO transformation on every request.
+- Multi-statement writes run inside `dataSource.transaction(...)`.
+- Composite indexes on `(conversationId, createdAt)` and `(userId, updatedAt)`; `synchronize: false` in production.
+
+## Tech Stack
 
 | Layer | Technologies |
 | :--- | :--- |
-| **Framework** | NestJS 11, TypeScript 5.7, Express 5 |
-| **AI Engine** | Vercel AI SDK v5 (`ai` + `@ai-sdk/groq`), Groq models via OpenAI-compatible naming |
-| **Database & ORM** | PostgreSQL 16 (Neon Serverless), TypeORM 0.3 |
-| **Object Storage** | AWS S3 SDK v3 (Supabase Object Storage S3-compatible / Local Disk) |
-| **File Processing** | Tesseract.js, Sharp, `pdf-parse`, `mammoth` |
-| **Validation & Auth** | `class-validator`, `class-transformer`, Passport JWT, bcrypt |
-| **Search & Tools** | Tavily Web Search API, Zod schema validation |
+| Framework | NestJS 11, TypeScript 5.7, Express |
+| AI engine | Vercel AI SDK v5 (`ai`), `@ai-sdk/groq`, Groq models (`gpt-oss-20b` / `gpt-oss-120b`) |
+| Database & ORM | PostgreSQL (Neon serverless), TypeORM 0.3, `pg` |
+| Object storage | AWS S3 SDK v3 (S3-compatible providers / local disk) |
+| File processing | Tesseract.js, Sharp, `pdf-parse`, `mammoth` |
+| Validation & auth | `class-validator`, `class-transformer`, Passport JWT, bcrypt |
+| Search & tools | Tavily, Zod |
 
----
-
-## 📁 Project Structure
+## Project Structure
 
 ```
 better-dev-api/
-├── architectures/                   # Architectural blueprints & documentation
-│   ├── ARCHITECTURE_CURRENT.md      # Current modular target architecture
-│   ├── ARCHITECTURE_LEGACY.md       # Historical DigitalOcean VPS reference
-│   └── ARCHITECTURE_PROPOSED.md     # Future BullMQ + RAG roadmap
-│
+├── architectures/                   # Current / legacy / proposed architecture specs
 ├── src/
 │   ├── common/                      # Cross-cutting HTTP & security primitives
-│   │   ├── decorators/              # @CurrentUser() parameter decorator
+│   │   ├── decorators/              # @CurrentUser()
 │   │   ├── filters/                 # GlobalExceptionFilter
 │   │   ├── guards/                  # JwtAuthGuard
 │   │   ├── interceptors/            # LoggingInterceptor
 │   │   └── interfaces/              # AuthUser interface
-│   │
-│   ├── config/                      # Environment & module configuration
-│   │   ├── database.config.ts       # TypeORM PostgreSQL connection config
-│   │   └── jwt.config.ts            # JWT expiration & secret config
-│   │
-│   ├── modules/
-│   │   ├── core/                    # Global AI intelligence layer
-│   │   │   ├── config/              # mode.config.ts, model.config.ts, provider.config.ts
-│   │   │   ├── constants/           # ai.constants.ts
-│   │   │   ├── prompts/             # System prompts & query intent analysis prompts
-│   │   │   ├── utils/               # message.utils.ts, model-loader.util.ts
-│   │   │   ├── ai.service.ts        # AI single-pass streaming & context management
-│   │   │   └── core.module.ts
-│   │   │
-│   │   ├── auth/                    # Authentication module
-│   │   │   ├── dto/                 # RegisterDto, LoginDto
-│   │   │   ├── strategies/          # JwtStrategy
-│   │   │   ├── auth.controller.ts
-│   │   │   ├── auth.service.ts
-│   │   │   └── auth.module.ts
-│   │   │
-│   │   ├── user/                    # User account management
-│   │   │   ├── entities/            # User entity
-│   │   │   ├── user.service.ts
-│   │   │   └── user.module.ts
-│   │   │
-│   │   ├── attachment/              # File upload, storage & OCR
-│   │   │   ├── dto/                 # UploadAttachmentDto
-│   │   │   ├── entities/            # Attachment entity
-│   │   │   ├── services/            # StorageService, FileProcessorService
-│   │   │   ├── attachment.controller.ts
-│   │   │   ├── attachment.service.ts
-│   │   │   └── attachment.module.ts
-│   │   │
-│   │   └── chat/                    # Chat orchestration & modes
-│   │       ├── dto/                 # ChatRequestDto, GenerateTitleDto, UpdateConversationDto
-│   │       ├── entities/            # Conversation, Message entities
-│   │       ├── modes/               # AutoClassifierService, ModeResolverService, ClassificationCacheService
-│   │       ├── tools/               # ToolRegistry, TavilyService, WebSearchTool
-│   │       ├── chat.controller.ts
-│   │       ├── chat.service.ts
-│   │       └── chat.module.ts
-│   │
-│   ├── app.module.ts                # Root application module
-│   ├── main.ts                      # NestJS bootstrap entry point
-│   └── health.controller.ts         # /health endpoint
-│
-├── package.json
-├── tsconfig.json
-└── README.md
+│   ├── config/                      # database, jwt, token-limit configuration
+│   ├── health.controller.ts         # GET /health
+│   ├── main.ts                      # Bootstrap: CORS whitelist, global pipes/filters
+│   ├── app.module.ts                # Root module
+│   └── modules/
+│       ├── core/                    # Global AI layer (AIService, model/mode/provider config, prompts)
+│       ├── auth/                    # Register / login / profile / logout
+│       ├── user/                    # User accounts
+│       ├── attachment/              # Upload, storage driver, OCR & extraction
+│       └── chat/                    # Conversations, SSE streaming, modes, tools, entities
+├── test/                            # Manual integration/stress scripts (not Jest)
+├── .github/workflows/               # CI: install + build + tests on main/PR
+├── render.yaml                      # Render blueprint (production)
+├── Dockerfile / docker-compose.yml / nginx      # Legacy reference infra (see Deployment)
+└── package.json
 ```
 
----
+Note: the Docker/nginx files are legacy reference material from an earlier DigitalOcean VPS deployment and are not used by the current Render-based stack.
 
-## 📡 API Documentation
+## API
 
-### Base URL
-- **Local**: `http://localhost:3001`
-- **Production API**: `https://better-dev-api.onrender.com`
-- **Live Health Check**: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health)
+Base URL: local `http://localhost:3001` — production `https://better-dev-api.onrender.com`. Health check: `GET /health`.
 
----
+All chat and attachment endpoints require `Authorization: Bearer <JWT_TOKEN>`.
 
-### Authentication Endpoints (`/auth`)
+### Authentication (`/auth`)
 
-#### 1. Register User
-```http
-POST /auth/register
-Content-Type: application/json
+**POST /auth/register** — Public. Creates an account and returns a JWT.
 
+```json
 {
   "email": "developer@example.com",
   "password": "securePassword123"
 }
 ```
-**Response (201 Created):**
+
+Response `201 Created`:
+
 ```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "7b8e3a21-93bf-4c7a-a63e-251f280a9db5",
-    "email": "developer@example.com"
-  }
+  "accessToken": "<jwt>",
+  "user": { "id": "<uuid>", "email": "developer@example.com", "credits": 1000 }
 }
 ```
 
-#### 2. Login
-```http
-POST /auth/login
-Content-Type: application/json
+**POST /auth/login** — Public. Same request/response shape as register.
 
-{
-  "email": "developer@example.com",
-  "password": "securePassword123"
-}
-```
-**Response (200 OK):**
-```json
-{
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "user": {
-    "id": "7b8e3a21-93bf-4c7a-a63e-251f280a9db5",
-    "email": "developer@example.com"
-  }
-}
-```
+**GET /auth/profile** — Returns the current user: `{ "userId": "<uuid>", "email": "..." }`.
 
-#### 3. Get Current Profile
-```http
-GET /auth/profile
-Authorization: Bearer <JWT_TOKEN>
-```
-**Response (200 OK):**
-```json
-{
-  "userId": "7b8e3a21-93bf-4c7a-a63e-251f280a9db5",
-  "email": "developer@example.com"
-}
-```
+**POST /auth/logout** — JWT is stateless; logout clears the client-side token. Returns `{ "message": "Logged out successfully" }`.
 
-#### 4. Logout
-```http
-POST /auth/logout
-Authorization: Bearer <JWT_TOKEN>
-```
-**Response (200 OK):**
-```json
-{
-  "message": "Logged out successfully"
-}
-```
+### Chat (`/chat`)
 
----
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| POST | `/chat/conversations/with-message` | Create a conversation and its first user message in one transaction (`{ title?, systemPrompt?, firstMessage, parts? }`) |
+| GET | `/chat/conversations` | List the user's conversations with latest message previews |
+| GET | `/chat/conversations/:id` | Conversation with ordered messages |
+| PATCH | `/chat/conversations/:id` | Update `title` (≤ 100 chars) and/or `systemPrompt` (≤ 2000 chars) |
+| POST | `/chat/conversations/:id/messages` | Send messages; returns an SSE text/tool delta stream. Body: `{ "messages": [{ "role": "user", "parts": [{ "type": "text", "text": "..." }] }], "modeOverride": "thinking" }` |
+| POST | `/chat/conversations/:id/generate-title` | Generate a short AI title from `{ "message": "..." }` → `{ "title": "..." }` |
+| PUT | `/chat/conversations/:id/system-prompt` | Replace the conversation system prompt (`{ "systemPrompt": "..." }`) |
+| DELETE | `/chat/conversations/:id` | Delete a conversation → `204 No Content` |
 
-### Chat Endpoints (`/chat`)
+### Attachments (`/attachments`)
 
-#### 1. Create Conversation with First Message
-```http
-POST /chat/conversations/with-message
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: application/json
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| POST | `/attachments/upload` | `multipart/form-data` with `file`, `conversationId`, optional `messageId`. Images/PDFs/DOCX only, 10 MB max |
+| GET | `/attachments/:id` | Attachment metadata (ownership-verified) |
+| DELETE | `/attachments/:id` | Delete the attachment and its storage object |
 
-{
-  "title": "React Performance Audit",
-  "firstMessage": "How do I optimize React 19 rendering?",
-  "systemPrompt": "You are a senior frontend architect."
-}
-```
+## Environment Variables
 
-#### 2. List User Conversations
-```http
-GET /chat/conversations
-Authorization: Bearer <JWT_TOKEN>
-```
-
-#### 3. Get Single Conversation with Ordered Messages
-```http
-GET /chat/conversations/:id
-Authorization: Bearer <JWT_TOKEN>
-```
-
-#### 4. Update Conversation Title or System Prompt
-```http
-PATCH /chat/conversations/:id
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: application/json
-
-{
-  "title": "Renamed Conversation Title"
-}
-```
-
-#### 5. Send Message (AI SDK v5 SSE Stream)
-```http
-POST /chat/conversations/:id/messages
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: application/json
-
-{
-  "messages": [
-    {
-      "role": "user",
-      "parts": [{ "type": "text", "text": "Analyze this document" }]
-    }
-  ],
-  "modeOverride": "thinking"
-}
-```
-**Response:** Server-Sent Events (SSE) text & tool delta stream.
-
-#### 6. Auto-Generate Title
-```http
-POST /chat/conversations/:id/generate-title
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: application/json
-
-{
-  "message": "Can you explain Postgres indexing strategies?"
-}
-```
-
-#### 7. Update System Prompt
-```http
-PUT /chat/conversations/:id/system-prompt
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: application/json
-
-{
-  "systemPrompt": "You are an expert PostgreSQL DBA."
-}
-```
-
-#### 8. Delete Conversation
-```http
-DELETE /chat/conversations/:id
-Authorization: Bearer <JWT_TOKEN>
-```
-
----
-
-### Attachment Endpoints (`/attachments`)
-
-#### 1. Upload Attachment
-```http
-POST /attachments/upload
-Authorization: Bearer <JWT_TOKEN>
-Content-Type: multipart/form-data
-
-file: [Binary File: PDF, Image, DOCX]
-conversationId: "e231e244-a97a-4883-9b8c-07c63e8cadfe"
-messageId: "optional-uuid"
-```
-
-#### 2. Get Attachment Metadata
-```http
-GET /attachments/:id
-Authorization: Bearer <JWT_TOKEN>
-```
-
-#### 3. Delete Attachment
-```http
-DELETE /attachments/:id
-Authorization: Bearer <JWT_TOKEN>
-```
-
----
-
-## ⚙️ Environment Variables
-
-Create a `.env` file in the root directory:
+See `.env.example` for the authoritative list with comments. The key variables are:
 
 ```env
 # Application
 PORT=3001
 NODE_ENV=development
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=http://localhost:3000      # comma-separated CORS whitelist
 
-# Authentication
-JWT_SECRET=super-secret-jwt-signing-key-minimum-32-chars
+# Auth
+JWT_SECRET=generate-a-secure-random-secret-at-least-32-chars
 JWT_EXPIRATION=7d
 
-# Database (PostgreSQL / Neon)
-DATABASE_URL=postgresql://user:password@host/database?sslmode=require
-# Or individual DB variables:
-# DATABASE_HOST=localhost
-# DATABASE_PORT=5432
-# DATABASE_USER=postgres
-# DATABASE_PASSWORD=postgres
-# DATABASE_NAME=better_dev_db
-# DATABASE_SSL=false
+# Database (production uses DATABASE_URL; local dev can use *_HOST/_PORT/_USER/_PASSWORD/_NAME)
+DATABASE_URL=postgresql://user:password@host:5432/better_dev_db
 
-# AI Providers & Keys
+# AI (Groq)
 GROQ_API_KEY=gsk_your_groq_api_key
 DEFAULT_AI_MODEL=openai/gpt-oss-120b
 AI_TEXT_MODEL=openai/gpt-oss-20b
 AI_TOOL_MODEL=openai/gpt-oss-120b
 AI_VISION_MODEL=openai/gpt-oss-120b
 
-# Search Tools
+# Search
 TAVILY_API_KEY=tvly-your-tavily-api-key
 
-# Storage (Supabase Object Storage — S3-compatible)
+# Storage (S3-compatible; Supabase Storage in production)
 USE_S3_STORAGE=true
-S3_REGION=ap-south-1
 S3_BUCKET_NAME=better-dev-attachments
+S3_REGION=ap-south-1
 S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
-S3_ACCESS_KEY_ID=your_access_key
-S3_SECRET_ACCESS_KEY=your_secret_key
-S3_FORCE_PATH_STYLE=true
-S3_PUBLIC_READ=false
+S3_ACCESS_KEY_ID=your-access-key
+S3_SECRET_ACCESS_KEY=your-secret-key
 S3_CDN_URL=https://<project-ref>.supabase.co/storage/v1/object/public/better-dev-attachments
+S3_PUBLIC_READ=false
+S3_FORCE_PATH_STYLE=true
+# Local development (no object storage):
+# USE_S3_STORAGE=false
+# LOCAL_STORAGE_PATH=./uploads
+
+# Token & upload limits (defaults shown)
+MAX_DOCUMENT_TOKENS=32000
+MAX_TOTAL_CONTEXT_TOKENS=64000
+MAX_UPLOAD_SIZE_BYTES=10485760
 ```
 
----
+## Getting Started
 
-## 🚀 Getting Started
+Prerequisites: Node.js 20+, a PostgreSQL database (local or [Neon](https://neon.tech)), and a [Groq](https://console.groq.com) API key.
 
-### 1. Install Dependencies
 ```bash
+# 1. Install dependencies
 npm install
-```
 
-### 2. Start Development Server
-```bash
+# 2. Configure environment
+cp .env.example .env   # then fill in real values
+
+# 3. Start the development server
 npm run start:dev
 ```
-API will be live at `http://localhost:3001`. Health check available at `http://localhost:3001/health`.
 
-### 3. Production Build
-```bash
-npm run build
-npm run start:prod
-```
+The API is live at `http://localhost:3001` with a health check at `http://localhost:3001/health`.
 
----
-
-## 🧪 Testing
-
-The repository includes a comprehensive Jest unit test suite:
+### Build & run the production build
 
 ```bash
-# Run all unit test suites
-npm test
-
-# Run tests in watch mode
-npm run test:watch
-
-# Generate code coverage report
-npm run test:cov
+npm run build         # tsc -p tsconfig.build.json
+npm run start:prod    # node dist/main
 ```
 
----
+Docker convenience scripts exist (`npm run docker:up` etc.) for the legacy local stack — note that it predates the Neon database and is intended as reference only.
 
-## 🌐 Deployment & Infrastructure
+## Testing
 
-The production stack runs on fully managed cloud infrastructure:
+The repository includes a Jest unit test suite (currently 5 suites / 19 tests):
 
-- **Web API Service**: [Render](https://render.com) (Node.js 20 native runtime, health check: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health)).
-- **Database**: [Neon](https://neon.tech) Serverless PostgreSQL 16.
-- **Object Storage**: [Supabase](https://supabase.com/docs/guides/storage) Object Storage (S3-compatible) — switched from Cloudflare R2 for free-tier price constraints. Attachment files are stored in Supabase Storage and served via its public object URL (`storage/v1/object/public/...`).
-- **Frontend UI**: [Vercel](https://vercel.com) ([better-dev-ui.vercel.app](https://better-dev-ui.vercel.app)).
+```bash
+npm test              # run all unit tests
+npm run test:watch    # watch mode
+npm run test:cov      # coverage report
+```
+
+There are also manual integration scripts under `test/` (`test-ai-sdk-v5.sh`, `stress-test.sh`) for exercising a running server.
+
+## CI
+
+GitHub Actions runs on pushes and pull requests to `main`: install dependencies (`npm ci`), verify the TypeScript build (`npm run build`), and run the Jest suite (`npm test`).
+
+## Deployment & Infrastructure
+
+The production stack runs on managed, free-tier cloud infrastructure — `render.yaml` is the Render blueprint:
+
+- **API**: [Render](https://render.com) web service. Health check: [`https://better-dev-api.onrender.com/health`](https://better-dev-api.onrender.com/health).
+- **Database**: [Neon](https://neon.tech) serverless PostgreSQL, injected via `DATABASE_URL`.
+- **Object storage**: [Supabase Storage](https://supabase.com/docs/guides/storage) (S3-compatible). Previously Cloudflare R2 was used; Supabase was chosen for free-tier pricing. Attachment files are served through the public object URL.
+- **Frontend**: [Better DEV UI](https://github.com/Kashif-Rezwi/better-dev-ui) deployed on [Vercel](https://vercel.com).
+
+The repository also contains legacy Docker (`Dockerfile`, `docker-compose.yml`) and `nginx/` configuration from an earlier DigitalOcean VPS deployment. These files are reference only and are not part of the current deployment; the compose stack has no database service and predates the Neon backend.
+
+## Related Repositories
+
+- [better-dev-ui](https://github.com/Kashif-Rezwi/better-dev-ui) — React client for this API.
+
+## License
+
+No license file is present. `package.json` declares the project `UNLICENSED` (all rights reserved by default).

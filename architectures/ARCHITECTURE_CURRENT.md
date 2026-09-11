@@ -34,7 +34,7 @@ graph TD
 
     subgraph Data_Layer["Data & Storage Infrastructure"]
         Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Indexes)")]
-        Storage[("Object Storage<br/>(Cloudflare R2 / AWS S3 / Local)")]
+        Storage[("Object Storage<br/>(Supabase Storage / Local)")]
     end
 
     UI_Upload --> Guard --> Validation --> AttachM
@@ -72,7 +72,7 @@ graph TD
 ### 3. Attachment Module (`src/modules/attachment`)
 *File ingestion, storage abstraction, and content extraction.*
 - **Conversation Ownership Verification**: Validates caller owns target `conversationId` prior to storage and database write.
-- **`storage.service.ts`**: Unified S3/Cloudflare R2/Local storage driver with native `crypto.randomUUID()`.
+- **`storage.service.ts`**: Provider-agnostic S3-compatible storage driver (Supabase Storage / R2 / DO Spaces / Local) with native `crypto.randomUUID()`.
 - **`attachment.service.ts`**: Encapsulates attachment queries, message linking, and Base64 resolution.
 - **`file-processor.service.ts`**: In-process extraction (Tesseract OCR, `pdf-parse`, `mammoth`).
 
