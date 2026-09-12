@@ -8,6 +8,7 @@
 [![TypeORM](https://img.shields.io/badge/TypeORM-0.3-FE0803?style=flat&logo=typeorm&logoColor=white)](https://typeorm.io/)
 [![Vercel AI SDK](https://img.shields.io/badge/Vercel_AI_SDK-v5-black?style=flat&logo=vercel&logoColor=white)](https://sdk.vercel.ai/)
 [![Groq](https://img.shields.io/badge/Groq-F55036?style=flat)](https://groq.com/)
+[![CI](https://github.com/Kashif-Rezwi/better-dev-api/actions/workflows/deploy.yml/badge.svg)](https://github.com/Kashif-Rezwi/better-dev-api/actions)
 
 ## Overview
 
@@ -181,9 +182,16 @@ Note: the Docker/nginx files are legacy reference material from an earlier Digit
 
 ## API
 
-Base URL: local `http://localhost:3001` — production `https://better-dev-api.onrender.com`. Health check: `GET /health`.
+Base URL: local `http://localhost:3001` — production `https://better-dev-api.onrender.com`.
 
 All chat and attachment endpoints require `Authorization: Bearer <JWT_TOKEN>`.
+
+### Health (`/health`)
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| GET | `/health` | Service status: `{ "status": "ok", "timestamp": "...", "service": "better-dev-ai-chat" }` |
+| GET | `/health/storage` | Storage driver status: `{ "status": "ok" \| "degraded", "storage": { ... } }` |
 
 ### Authentication (`/auth`)
 
@@ -263,10 +271,10 @@ TAVILY_API_KEY=tvly-your-tavily-api-key
 USE_S3_STORAGE=true
 S3_BUCKET_NAME=better-dev-attachments
 S3_REGION=ap-south-1
-S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
+S3_ENDPOINT=https://<project-ref>.storage.supabase.co/storage/v1/s3
 S3_ACCESS_KEY_ID=your-access-key
 S3_SECRET_ACCESS_KEY=your-secret-key
-S3_CDN_URL=https://<project-ref>.supabase.co/storage/v1/object/public/better-dev-attachments
+S3_CDN_URL=https://<project-ref>.storage.supabase.co/storage/v1/object/public/better-dev-attachments
 S3_PUBLIC_READ=false
 S3_FORCE_PATH_STYLE=true
 # Local development (no object storage):
@@ -307,7 +315,7 @@ Docker convenience scripts exist (`npm run docker:up` etc.) for the legacy local
 
 ## Testing
 
-The repository includes a Jest unit test suite (currently 5 suites / 19 tests):
+The repository includes a Jest unit test suite (currently 5 suites / 32 tests):
 
 ```bash
 npm test              # run all unit tests

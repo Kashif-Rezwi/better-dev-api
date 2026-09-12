@@ -104,6 +104,7 @@ The API operates as a **Modular Multi-Modal AI Engine** built on NestJS 11 and V
 
 Automated unit test coverage across all foundational layers:
 - `src/modules/auth/auth.service.spec.ts`: Tests user registration, password hashing verification, and JWT login.
+- `src/modules/chat/dto/chat-request.dto.spec.ts`: Tests nested multi-modal payload validation and DTO transformations.
 - `src/modules/chat/modes/mode-resolver.service.spec.ts`: Tests fast/thinking overrides and auto-classification delegation.
 - `src/modules/core/utils/message.utils.spec.ts`: Tests multi-modal text extraction, legacy conversion, and tool detection.
 - `src/modules/attachment/services/storage.service.spec.ts`: Tests storage initialization and driver dispatch.
