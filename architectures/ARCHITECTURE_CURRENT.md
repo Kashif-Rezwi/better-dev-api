@@ -8,48 +8,53 @@ This document describes the modern, modular, and multi-modal architecture of the
 
 The API operates as a **Modular Multi-Modal AI Engine** built on NestJS 11 and Vercel AI SDK v5.
 
-```mermaid
-graph TD
-    subgraph Client_Layer["Client Layer (better-dev-ui)"]
-        UI_Upload["POST /attachments/upload (Multer)"]
-        UI_Chat["POST /chat/conversations/:id/messages (SSE)"]
-        UI_List["GET /chat/conversations"]
-    end
-
-    subgraph HTTP_Middleware["HTTP & Security Layer"]
-        Guard["JwtAuthGuard + @CurrentUser()"]
-        Filter["GlobalExceptionFilter (Uniform JSON Errors)"]
-        Logging["LoggingInterceptor (Method, URL, Latency)"]
-        Validation["ValidationPipe (Whitelist + Transform)"]
-    end
-
-    subgraph Application_Modules["Modular Domain Layer"]
-        AuthM["AuthModule<br/>(JWT, Password Hashing)"]
-        UserM["UserModule<br/>(User Account & Profile)"]
-        AttachM["AttachmentModule<br/>(Storage, OCR, Ownership)"]
-        ChatM["ChatModule<br/>(Orchestration, SSE, Tools)"]
-        ModesM["ModesModule<br/>(Classification, Caching)"]
-        CoreM["CoreModule (@Global)<br/>(AI Engine, Model Loader)"]
-    end
-
-    subgraph Data_Layer["Data & Storage Infrastructure"]
-        Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Indexes)")]
-        Storage[("Object Storage<br/>(Supabase Storage / Local)")]
-    end
-
-    UI_Upload --> Guard --> Validation --> AttachM
-    UI_Chat --> Guard --> Validation --> ChatM
-    UI_List --> Guard --> Validation --> ChatM
-
-    AuthM --> UserM
-    AttachM --> Postgres
-    AttachM --> Storage
-
-    ChatM --> ModesM
-    ChatM --> AttachM
-    ChatM --> CoreM
-    ChatM --> Postgres
-    ModesM --> CoreM
+```text
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            CLIENT LAYER (better-dev-ui)                          │
+│                                                                                  │
+│   POST /attachments/upload     POST /chat/.../messages     GET /chat/...         │
+│   (Multipart file upload)      (SSE streaming response)    (Conversations list)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                              HTTP & SECURITY LAYER                               │
+│                                                                                  │
+│   • JwtAuthGuard + @CurrentUser()        • ValidationPipe (Whitelist/Transform)  │
+│   • LoggingInterceptor (Timing/Latency)  • GlobalExceptionFilter (Uniform JSON)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                              MODULAR DOMAIN LAYER                                │
+│                                                                                  │
+│  ┌─────────────────────────┐   ┌──────────────────────────────────────────────┐  │
+│  │       AuthModule        │   │                  ChatModule                  │  │
+│  │  (JWT, Password Hash)   │   │  • Orchestration, SSE Streaming & Tools      │  │
+│  └────────────┬────────────┘   │  • Conversation Lifecycle Management         │  │
+│               │                └───────┬──────────────┬──────────────┬────────┘  │
+│               ▼                        │              │              │           │
+│  ┌─────────────────────────┐           ▼              │              │           │
+│  │       UserModule        │   ┌──────────────┐       │              │           │
+│  │  (User Account/Profile) │   │ Attachment-  │       │              │           │
+│  └─────────────────────────┘   │ Module       │       │              │           │
+│                                │ • Storage    │       ▼              ▼           │
+│                                │ • In-process │ ┌───────────┐  ┌──────────────┐  │
+│                                │   OCR / Text │ │ModesModule│  │  CoreModule  │  │
+│                                └───────┬──────┘ │• Classify │  │   (@Global)  │  │
+│                                        │        │• Caching  │─►│• AI Engine   │  │
+│                                        │        │  (MD5)    │  │• Model Loader│  │
+│                                        │        └───────────┘  └──────────────┘  │
+└────────────────────────────────────────┼─────────────────────────────┬───────────┘
+                                         │                             │
+                                         ▼                             ▼
+┌────────────────────────────────────────┴─────────────────────────────┴───────────┐
+│                          DATA & STORAGE INFRASTRUCTURE                           │
+│                                                                                  │
+│        Neon PostgreSQL (Serverless)           Object Storage Driver              │
+│        • TypeORM 0.3 Repositories             • Supabase Storage / Local Disk    │
+│        • Composite Performance Indexes        • S3-Compatible Driver Interface   │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---

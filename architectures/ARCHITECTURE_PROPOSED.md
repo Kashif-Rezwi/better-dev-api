@@ -45,33 +45,72 @@ The proposed architecture transitions from a single-process model to a distribut
 
 ## 🗺️ Visual Flowchart
 
-```mermaid
-graph TD
-    subgraph "Main API (NestJS)"
-        A[Client: Upload File] --> B[Save to S3/Local]
-        B --> C[Push Job to BullMQ/Redis]
-        C --> D[Return 202 Accepted]
-    end
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│              PHASE A: ASYNC FILE INGESTION & VECTORIZATION               │
+└──────────────────────────────────────────────────────────────────────────┘
 
-    subgraph "Background Worker"
-        C -.-> E[Job Consumer]
-        E --> F[OCR / PDF / Docx Extraction]
-        F --> G[Text Chunker: Split into Chunks]
-        G --> H[Embedding Engine: Text -> Vector]
-        H --> I[Store in Vector DB: Pinecone/PGVector]
-        I --> J[Notify Frontend via WebSocket]
-    end
+   Client Browser
+         │
+         │ 1. POST /attachments/upload (Multipart file)
+         ▼
+ ┌─────────────────────────────────────────┐
+ │            Main API (NestJS)            │
+ │  • Authenticate & validate attachment   │
+ │  • Save raw file to S3 / local disk     │
+ │  • Push background job to BullMQ/Redis  │──► 2. Return 202 Accepted (Instant)
+ └────────────────────┬────────────────────┘
+                      │
+                      │ 3. Asynchronous Job Dispatch (Redis)
+                      ▼
+ ┌───────────────────────────────────────────────────────────────────────────┐
+ │                         BACKGROUND WORKER PROCESS                         │
+ │                                                                           │
+ │   Job Consumer (BullMQ Redis Queue)                                       │
+ │        │                                                                  │
+ │        ▼                                                                  │
+ │   Multi-Modal Extraction (Tesseract OCR / PDF-Parse / Mammoth DOCX)       │
+ │        │                                                                  │
+ │        ▼                                                                  │
+ │   Text Chunker (Split document into semantically coherent chunks)         │
+ │        │                                                                  │
+ │        ▼                                                                  │
+ │   Embedding Engine (OpenAI text-embedding-3-small: Text ──► Vector)       │
+ │        │                                                                  │
+ │        ▼                                                                  │
+ │   Vector Database Storage (Neon pgvector / Pinecone Vector Store)         │
+ │        │                                                                  │
+ │        ▼                                                                  │
+ │   Socket.io Gateway ──► 4. Ready Event via WebSocket ──► Client Browser   │
+ └───────────────────────────────────────────────────────────────────────────┘
 
-    subgraph "Chat Service (RAG)"
-        K[Client: Chat Request] --> L[Question -> Vector]
-        L --> M[Search Vector DB for Top Matches]
-        M --> N[Augment Prompt with Context]
-        N --> O[Stream AI Response]
-    end
 
-    %% Flow Connections
-    J --> K
-    O --> Client
+┌──────────────────────────────────────────────────────────────────────────┐
+│                PHASE B: CONTEXTUAL RETRIEVAL & CHAT (RAG)                │
+└──────────────────────────────────────────────────────────────────────────┘
+
+   Client Browser
+         │
+         │ 1. POST /chat/conversations/:id/messages
+         ▼
+ ┌─────────────────────────────────────────────────────────────────────────┐
+ │                            CHAT SERVICE (RAG)                           │
+ │                                                                         │
+ │  ┌─────────────────┐      ┌─────────────────┐      ┌─────────────────┐  │
+ │  │  Convert User   │      │   Query Top-3   │      │  Inject Chunks  │  │
+ │  │  Question into  │─────►│   Chunks via    │─────►│  into System    │  │
+ │  │  Dense Vector   │Cosine│  Neon pgvector  │Chunks│  Prompt Context │  │
+ │  └─────────────────┘      └─────────────────┘      └────────┬────────┘  │
+ │                                                             │           │
+ │                                                             ▼           │
+ │   Groq LLM Streaming Engine ◄───────────────────────────────┘           │
+ │   • Grounded answer strictly from retrieved document chunks             │
+ │   • Real-time response deltas streamed via SSE to client                │
+ └──────────────────────────────────┬──────────────────────────────────────┘
+                                    │
+                                    │ 2. Real-Time Token Stream (SSE)
+                                    ▼
+                              Client Browser
 ```
 
 ---

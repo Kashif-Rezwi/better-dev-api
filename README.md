@@ -22,48 +22,53 @@ Better DEV API is a NestJS 11 application that powers the [Better DEV UI](https:
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph Client_Layer["Client Layer (better-dev-ui)"]
-        UI_Upload["POST /attachments/upload (Multer)"]
-        UI_Chat["POST /chat/conversations/:id/messages (SSE)"]
-        UI_List["GET /chat/conversations"]
-    end
-
-    subgraph Security_Middleware["Security & Middleware Layer"]
-        Guard["JwtAuthGuard + @CurrentUser()"]
-        Filter["GlobalExceptionFilter (Uniform JSON Errors)"]
-        Logging["LoggingInterceptor (Method, URL, Latency)"]
-        Validation["ValidationPipe (Whitelist + Transform)"]
-    end
-
-    subgraph Domain_Modules["Domain Modules"]
-        AuthM["AuthModule<br/>(JWT, Password Hashing)"]
-        UserM["UserModule<br/>(User Accounts)"]
-        AttachM["AttachmentModule<br/>(Storage, OCR, Ownership)"]
-        ChatM["ChatModule<br/>(Conversations, SSE, Tools)"]
-        ModesM["ModesModule<br/>(Auto-Classification, MD5 Cache)"]
-        CoreM["CoreModule (@Global)<br/>(AIService, Model & Provider Config)"]
-    end
-
-    subgraph Data_Storage["Data & Storage Infrastructure"]
-        Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Composite Indexes)")]
-        Storage[("S3-compatible Object Storage<br/>(Supabase Storage / Local)")]
-    end
-
-    UI_Upload --> Guard --> Validation --> AttachM
-    UI_Chat --> Guard --> Validation --> ChatM
-    UI_List --> Guard --> Validation --> ChatM
-
-    AuthM --> UserM
-    AttachM --> Postgres
-    AttachM --> Storage
-
-    ChatM --> ModesM
-    ChatM --> AttachM
-    ChatM --> CoreM
-    ChatM --> Postgres
-    ModesM --> CoreM
+```text
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            CLIENT LAYER (better-dev-ui)                          │
+│                                                                                  │
+│   POST /attachments/upload     POST /chat/.../messages     GET /chat/...         │
+│   (Multipart file upload)      (SSE streaming response)    (Conversations list)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                           SECURITY & MIDDLEWARE LAYER                            │
+│                                                                                  │
+│   • JwtAuthGuard + @CurrentUser()        • ValidationPipe (Whitelist/Transform)  │
+│   • LoggingInterceptor (Timing/Latency)  • GlobalExceptionFilter (Uniform JSON)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                                  DOMAIN MODULES                                  │
+│                                                                                  │
+│  ┌─────────────────────────┐   ┌──────────────────────────────────────────────┐  │
+│  │       AuthModule        │   │                  ChatModule                  │  │
+│  │  (JWT, Password Hash)   │   │  • SSE Streaming & Conversation Lifecycle    │  │
+│  └────────────┬────────────┘   │  • Tool Orchestration (Tavily Web Search)    │  │
+│               │                └───────┬──────────────┬──────────────┬────────┘  │
+│               ▼                        │              │              │           │
+│  ┌─────────────────────────┐           ▼              │              │           │
+│  │       UserModule        │   ┌──────────────┐       │              │           │
+│  │  (User Profile/Account) │   │ Attachment-  │       │              │           │
+│  └─────────────────────────┘   │ Module       │       │              │           │
+│                                │ • Storage    │       ▼              ▼           │
+│                                │ • In-process │ ┌───────────┐  ┌──────────────┐  │
+│                                │   OCR / Text │ │ModesModule│  │  CoreModule  │  │
+│                                └───────┬──────┘ │• Auto-    │  │   (@Global)  │  │
+│                                        │        │  Classify │  │• AIService   │  │
+│                                        │        │• MD5 Cache│─►│• Model Config│  │
+│                                        │        └───────────┘  └──────────────┘  │
+└────────────────────────────────────────┼─────────────────────────────┬───────────┘
+                                         │                             │
+                                         ▼                             ▼
+┌────────────────────────────────────────┴─────────────────────────────┴───────────┐
+│                          DATA & STORAGE INFRASTRUCTURE                           │
+│                                                                                  │
+│        Neon PostgreSQL (Serverless)           S3-Compatible Object Storage       │
+│        • TypeORM 0.3 Repositories             • Supabase Storage / Local Disk    │
+│        • Composite Performance Indexes        • Async Upload & Pre-signed URLs   │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Request flow (chat)
