@@ -42,8 +42,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       errorName = exception.name;
     }
 
-    // Log 500 errors with full stack trace for observability
-    if (status >= 500) {
+    // Log 5xx errors with full stack trace, except expected operational 503s
+    // (e.g. temporarily paused object storage). Those stay warns without stacks.
+    if (status >= 500 && status !== HttpStatus.SERVICE_UNAVAILABLE) {
       this.logger.error(
         `[${request.method}] ${request.url} - ${status} Error: ${
           typeof message === 'object' ? JSON.stringify(message) : message

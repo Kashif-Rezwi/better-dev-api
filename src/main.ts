@@ -44,7 +44,9 @@ async function bootstrap() {
     }),
   );
 
-  // Payload limits for JSON payloads
+  // Payload limits for JSON payloads (must match tokenLimits.maxUploadSizeBytes + headroom for base64)
+  // Multer file uploads bypass these – FileInterceptor has its own limits – but JSON chat payloads with
+  // inlined files use this. Keep generous (10mb) to avoid 413 on chat messages with attachments.
   app.use(express.json({ limit: '10mb' }));
   app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
