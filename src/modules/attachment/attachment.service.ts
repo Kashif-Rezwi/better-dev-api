@@ -109,26 +109,30 @@ export class AttachmentService {
                 mimeType,
             );
 
-            // Save thumbnail if generated
+            // Save thumbnail if generated (best-effort – don't fail extraction if storage paused)
             let thumbnailUrl: string | undefined;
             if (processed.thumbnailBuffer) {
-                const attachment = await this.attachmentRepository.findOne({
-                    where: { id: attachmentId },
-                });
+                try {
+                    const attachment = await this.attachmentRepository.findOne({
+                        where: { id: attachmentId },
+                    });
 
-                if (attachment) {
-                    const thumbnailFile: Express.Multer.File = {
-                        originalname: `thumb_${attachment.fileName}`,
-                        buffer: processed.thumbnailBuffer,
-                        mimetype: 'image/jpeg',
-                        size: processed.thumbnailBuffer.length,
-                    } as Express.Multer.File;
+                    if (attachment) {
+                        const thumbnailFile: Express.Multer.File = {
+                            originalname: `thumb_${attachment.fileName}`,
+                            buffer: processed.thumbnailBuffer,
+                            mimetype: 'image/jpeg',
+                            size: processed.thumbnailBuffer.length,
+                        } as Express.Multer.File;
 
-                    const { url } = await this.storageService.upload(
-                        thumbnailFile,
-                        attachment.conversationId,
-                    );
-                    thumbnailUrl = url;
+                        const { url } = await this.storageService.upload(
+                            thumbnailFile,
+                            attachment.conversationId,
+                        );
+                        thumbnailUrl = url;
+                    }
+                } catch (error: any) {
+                    this.logger.warn(`Thumbnail upload skipped for ${attachmentId}: ${error.message}`);
                 }
             }
 
@@ -176,6 +180,11 @@ export class AttachmentService {
             const base64 = buffer.toString('base64');
             return `data:${mimeType};base64,${base64}`;
         } catch (error: any) {
+            // ServiceUnavailable (503) from StorageService means Supabase paused or S3 down – don't bubble, just skip image
+            if (error?.getStatus?.() === 503 || error?.status === 503 || /ServiceUnavailable|temporarily.*paused|temporarily.*unavailable/i.test(error?.message)) {
+                this.logger.warn(`Skipping image resolve for ${urlOrPath}: storage unavailable (${error.message})`);
+                return null;
+            }
             this.logger.error(`Failed to resolve image to base64 for ${urlOrPath}: ${error.message}`);
             return null;
         }
@@ -202,13 +211,12 @@ export class AttachmentService {
     async deleteAttachment(id: string, userId: string): Promise<void> {
         const attachment = await this.getAttachment(id, userId);
 
-        // Delete from storage
+        // Delete from storage – accepts a key or full URL (StorageService normalizes internally)
         await this.storageService.delete(attachment.storageKey);
 
-        // Delete thumbnail if exists
+        // Delete thumbnail if exists – pass the raw URL/key; StorageService strips CDN/prefix hosts.
         if (attachment.thumbnailUrl) {
-            const thumbnailKey = attachment.thumbnailUrl.replace('/uploads/', '');
-            await this.storageService.delete(thumbnailKey);
+            await this.storageService.delete(attachment.thumbnailUrl);
         }
 
         // Delete from database

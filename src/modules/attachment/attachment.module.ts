@@ -11,6 +11,6 @@ import { Conversation } from '../chat/entities/conversation.entity';
     imports: [TypeOrmModule.forFeature([Attachment, Conversation])],
     controllers: [AttachmentController],
     providers: [AttachmentService, StorageService, FileProcessorService],
-    exports: [AttachmentService], // Export for use in ChatModule
+    exports: [AttachmentService, StorageService], // Export for use in ChatModule & HealthController
 })
 export class AttachmentModule { }

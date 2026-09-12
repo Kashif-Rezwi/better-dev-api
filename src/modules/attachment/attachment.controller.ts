@@ -27,10 +27,14 @@ export class AttachmentController {
   @UseInterceptors(
     FileInterceptor('file', {
       limits: {
-        fileSize: 50 * 1024 * 1024, // 50MB max upload buffer
+        // Keep Multer buffer generous (50MB) but the service enforces the real
+        // 10MB limit via tokenLimits.maxUploadSizeBytes so config/env is single source of truth.
+        // Multer must be higher to avoid truncating large files before we can return a clear 400.
+        fileSize: 50 * 1024 * 1024,
       },
       fileFilter: (req, file, cb) => {
-        // Allow images, PDFs, documents
+        // Allow images, PDFs, documents – MAX_FILE_SIZE & ALLOWED_FILE_TYPES must stay in sync
+        // with better-dev-ui/src/types/chat.ts and better-dev-ui/src/services/upload.service.ts
         const allowedMimes = [
           'image/jpeg',
           'image/jpg',
@@ -47,7 +51,7 @@ export class AttachmentController {
         } else {
           cb(
             new BadRequestException(
-              `File type not supported: ${file.mimetype}`,
+              `File type not supported: ${file.mimetype}. Allowed: Images (jpeg/png/gif/webp), PDF, DOCX`,
             ),
             false,
           );
