@@ -1,7 +1,7 @@
 {
-  "name": "server",
-  "version": "0.0.1",
-  "description": "Core server and API for Better DEV, the AI chat platform.",
+  "name": "better-dev-api",
+  "version": "1.0.0",
+  "description": "NestJS 11 AI backend with Vercel AI SDK v5 SSE streaming, Groq LLM inference, Tavily search, OCR file extraction, and Neon PostgreSQL.",
   "author": "",
   "private": true,
   "license": "UNLICENSED",
@@ -11,6 +11,7 @@
     "start:debug": "nest start --debug --watch",
     "start:prod": "node dist/main",
     "build": "tsc -p tsconfig.build.json",
+    "lint": "eslint .",
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
@@ -98,7 +99,16 @@
     "type": "git",
     "url": "https://github.com/Kashif-Rezwi/better-dev-api.git"
   },
-  "keywords": [],
+  "keywords": [
+    "nestjs",
+    "vercel-ai-sdk",
+    "groq",
+    "postgresql",
+    "typeorm",
+    "sse",
+    "tavily",
+    "tesseract-ocr"
+  ],
   "bugs": {
     "url": "https://github.com/Kashif-Rezwi/better-dev-api/issues"
   },

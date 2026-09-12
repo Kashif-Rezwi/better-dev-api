@@ -75,75 +75,71 @@ When a user sends a message: "What is the price of Bitcoin today?"
 
 ### 🗺️ Streaming Chat Flow (Visual)
 
-```mermaid
-graph TD
-    subgraph Client
-        Req[POST /chat/conversations/:id/messages]
-        SSE[Receive SSE Token Stream]
-    end
-
-    subgraph Auth_Layer
-        Guard[JwtAuthGuard]
-        Extract[Extract userId from JWT]
-    end
-
-    subgraph Chat_Service_Brain
-        Verify[Verify Conversation Ownership]
-        LoadHistory[Load & Format History]
-        SaveUser[Save User Message to PostgreSQL]
-        
-        subgraph Mode_Logic
-            Resolve[ModeResolverService]
-            Auto[AutoClassifier: AI Complexity Check]
-            Cache[ClassificationCache: Check MD5]
-        end
-        
-        subgraph Intent_Logic
-            Intent[AIService.analyzeQueryIntent]
-            ToolCheck{Need Web Search?}
-            GetTools[ToolRegistry.toAISDKFormat]
-        end
-    end
-
-    subgraph AI_SDK_V5_Streaming
-        StreamInit[AIService.streamResponseWithMode]
-        Groq[Groq LLM Interaction]
-        ToolExec[Tool Execution: Tavily Web Search]
-        SSEOut[Stream Tokens via SSE]
-    end
-
-    subgraph Finalization
-        OnFinish[AI SDK onFinish Callback]
-        SaveAsst[Save Assistant Message + Metadata]
-        UpdateTS[Update Conversation updatedAt]
-    end
-
-    %% Flow Connections
-    Req --> Guard
-    Guard --> Extract
-    Extract --> Verify
-    Verify --> LoadHistory
-    LoadHistory --> SaveUser
-    
-    SaveUser --> Resolve
-    Resolve --> Auto
-    Auto --> Cache
-    Cache --> Intent
-    
-    Intent --> ToolCheck
-    ToolCheck -- YES --> GetTools
-    ToolCheck -- NO --> StreamInit
-    GetTools --> StreamInit
-    
-    StreamInit --> Groq
-    Groq --> ToolExec
-    ToolExec --> Groq
-    Groq --> SSEOut
-    SSEOut --> SSE
-    
-    Groq -- Stream End --> OnFinish
-    OnFinish --> SaveAsst
-    SaveAsst --> UpdateTS
+```text
+┌──────────────────────────────────────────────────────────────────────────┐
+│                              CLIENT REQUEST                              │
+│                  POST /chat/conversations/:id/messages                   │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌────────────────────────────────────┴─────────────────────────────────────┐
+│                         AUTHENTICATION & CONTEXT                         │
+│                                                                          │
+│   JwtAuthGuard  ──►  Extract userId from JWT  ──►  Verify Ownership      │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌────────────────────────────────────┴─────────────────────────────────────┐
+│                        HISTORY & MESSAGE INGESTION                       │
+│                                                                          │
+│   • Load & format previous conversation message history                  │
+│   • Persist incoming User Message to PostgreSQL database                 │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌────────────────────────────────────┴─────────────────────────────────────┐
+│                      MODE RESOLUTION & INTENT CHECK                      │
+│                                                                          │
+│   ModeResolverService                                                    │
+│   ├── Heuristic Fast-Path (< 15 characters)                              │
+│   ├── In-Memory MD5 Cache Check (5-minute TTL)                           │
+│   └── AutoClassifier LLM Complexity Check                                │
+│                                                                          │
+│   Query Intent Analysis (AIService.analyzeQueryIntent)                   │
+│   ├── Needs Web Search? ──► YES ──► ToolRegistry (Tavily Web Search)     │
+│   └── Needs Web Search? ──► NO  ──► Direct LLM Stream                    │
+└────────────────────────────────────┬─────────────────────────────────────┘
+                                     │
+                                     ▼
+┌────────────────────────────────────┴─────────────────────────────────────┐
+│                    AI SDK v5 STREAMING & EXECUTION                       │
+│                                                                          │
+│   AIService.streamResponseWithMode()                                     │
+│   ┌──────────────────────────────────────────────────────────────────┐   │
+│   │                                                                  │   │
+│   │   Groq LLM Interaction   ◄──(Tool Call)──►   Tavily Web Search   │   │
+│   │            │                                                     │   │
+│   │            ▼ (Token Streaming Deltas)                            │   │
+│   │   SSE Token Stream ──► Client Browser / UI Application           │   │
+│   │                                                                  │   │
+│   └──────────────────────────────────┬───────────────────────────────┘   │
+│                                      │                                   │
+└──────────────────────────────────────┼───────────────────────────────────┘
+                                       │ (Stream Complete)
+                                       ▼
+┌──────────────────────────────────────┴───────────────────────────────────┐
+│                               FINALIZATION                               │
+│                                                                          │
+│   • AI SDK onFinish Callback Triggered                                   │
+│   • Persist Assistant Message + Tool Call Metadata in PostgreSQL         │
+│   • Update Conversation updatedAt Timestamp                              │
+└──────────────────────────────────────┬───────────────────────────────────┘
+                                       │
+                                       ▼
+┌──────────────────────────────────────┴───────────────────────────────────┐
+│                             CLIENT COMPLETE                              │
+│                  Full response displayed in chat view                    │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---

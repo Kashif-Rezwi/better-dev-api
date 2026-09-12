@@ -8,6 +8,7 @@
 [![TypeORM](https://img.shields.io/badge/TypeORM-0.3-FE0803?style=flat&logo=typeorm&logoColor=white)](https://typeorm.io/)
 [![Vercel AI SDK](https://img.shields.io/badge/Vercel_AI_SDK-v5-black?style=flat&logo=vercel&logoColor=white)](https://sdk.vercel.ai/)
 [![Groq](https://img.shields.io/badge/Groq-F55036?style=flat)](https://groq.com/)
+[![CI](https://github.com/Kashif-Rezwi/better-dev-api/actions/workflows/deploy.yml/badge.svg)](https://github.com/Kashif-Rezwi/better-dev-api/actions)
 
 ## Overview
 
@@ -22,48 +23,53 @@ Better DEV API is a NestJS 11 application that powers the [Better DEV UI](https:
 
 ## Architecture
 
-```mermaid
-graph TD
-    subgraph Client_Layer["Client Layer (better-dev-ui)"]
-        UI_Upload["POST /attachments/upload (Multer)"]
-        UI_Chat["POST /chat/conversations/:id/messages (SSE)"]
-        UI_List["GET /chat/conversations"]
-    end
-
-    subgraph Security_Middleware["Security & Middleware Layer"]
-        Guard["JwtAuthGuard + @CurrentUser()"]
-        Filter["GlobalExceptionFilter (Uniform JSON Errors)"]
-        Logging["LoggingInterceptor (Method, URL, Latency)"]
-        Validation["ValidationPipe (Whitelist + Transform)"]
-    end
-
-    subgraph Domain_Modules["Domain Modules"]
-        AuthM["AuthModule<br/>(JWT, Password Hashing)"]
-        UserM["UserModule<br/>(User Accounts)"]
-        AttachM["AttachmentModule<br/>(Storage, OCR, Ownership)"]
-        ChatM["ChatModule<br/>(Conversations, SSE, Tools)"]
-        ModesM["ModesModule<br/>(Auto-Classification, MD5 Cache)"]
-        CoreM["CoreModule (@Global)<br/>(AIService, Model & Provider Config)"]
-    end
-
-    subgraph Data_Storage["Data & Storage Infrastructure"]
-        Postgres[("Neon PostgreSQL<br/>(TypeORM 0.3 + Composite Indexes)")]
-        Storage[("S3-compatible Object Storage<br/>(Supabase Storage / Local)")]
-    end
-
-    UI_Upload --> Guard --> Validation --> AttachM
-    UI_Chat --> Guard --> Validation --> ChatM
-    UI_List --> Guard --> Validation --> ChatM
-
-    AuthM --> UserM
-    AttachM --> Postgres
-    AttachM --> Storage
-
-    ChatM --> ModesM
-    ChatM --> AttachM
-    ChatM --> CoreM
-    ChatM --> Postgres
-    ModesM --> CoreM
+```text
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            CLIENT LAYER (better-dev-ui)                          │
+│                                                                                  │
+│   POST /attachments/upload     POST /chat/.../messages     GET /chat/...         │
+│   (Multipart file upload)      (SSE streaming response)    (Conversations list)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                           SECURITY & MIDDLEWARE LAYER                            │
+│                                                                                  │
+│   • JwtAuthGuard + @CurrentUser()        • ValidationPipe (Whitelist/Transform)  │
+│   • LoggingInterceptor (Timing/Latency)  • GlobalExceptionFilter (Uniform JSON)  │
+└────────────────────────┬──────────────────┬───────────────────────┬──────────────┘
+                         │                  │                       │
+                         ▼                  ▼                       ▼
+┌────────────────────────┴──────────────────┴───────────────────────┴──────────────┐
+│                                  DOMAIN MODULES                                  │
+│                                                                                  │
+│  ┌─────────────────────────┐   ┌──────────────────────────────────────────────┐  │
+│  │       AuthModule        │   │                  ChatModule                  │  │
+│  │  (JWT, Password Hash)   │   │  • SSE Streaming & Conversation Lifecycle    │  │
+│  └────────────┬────────────┘   │  • Tool Orchestration (Tavily Web Search)    │  │
+│               │                └───────┬──────────────┬──────────────┬────────┘  │
+│               ▼                        │              │              │           │
+│  ┌─────────────────────────┐           ▼              │              │           │
+│  │       UserModule        │   ┌──────────────┐       │              │           │
+│  │  (User Profile/Account) │   │ Attachment-  │       │              │           │
+│  └─────────────────────────┘   │ Module       │       │              │           │
+│                                │ • Storage    │       ▼              ▼           │
+│                                │ • In-process │ ┌───────────┐  ┌──────────────┐  │
+│                                │   OCR / Text │ │ModesModule│  │  CoreModule  │  │
+│                                └───────┬──────┘ │• Auto-    │  │   (@Global)  │  │
+│                                        │        │  Classify │  │• AIService   │  │
+│                                        │        │• MD5 Cache│─►│• Model Config│  │
+│                                        │        └───────────┘  └──────────────┘  │
+└────────────────────────────────────────┼─────────────────────────────┬───────────┘
+                                         │                             │
+                                         ▼                             ▼
+┌────────────────────────────────────────┴─────────────────────────────┴───────────┐
+│                          DATA & STORAGE INFRASTRUCTURE                           │
+│                                                                                  │
+│        Neon PostgreSQL (Serverless)           S3-Compatible Object Storage       │
+│        • TypeORM 0.3 Repositories             • Supabase Storage / Local Disk    │
+│        • Composite Performance Indexes        • Async Upload & Pre-signed URLs   │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Request flow (chat)
@@ -176,9 +182,16 @@ Note: the Docker/nginx files are legacy reference material from an earlier Digit
 
 ## API
 
-Base URL: local `http://localhost:3001` — production `https://better-dev-api.onrender.com`. Health check: `GET /health`.
+Base URL: local `http://localhost:3001` — production `https://better-dev-api.onrender.com`.
 
 All chat and attachment endpoints require `Authorization: Bearer <JWT_TOKEN>`.
+
+### Health (`/health`)
+
+| Method | Path | Purpose |
+| :--- | :--- | :--- |
+| GET | `/health` | Service status: `{ "status": "ok", "timestamp": "...", "service": "better-dev-ai-chat" }` |
+| GET | `/health/storage` | Storage driver status: `{ "status": "ok" \| "degraded", "storage": { ... } }` |
 
 ### Authentication (`/auth`)
 
@@ -258,10 +271,10 @@ TAVILY_API_KEY=tvly-your-tavily-api-key
 USE_S3_STORAGE=true
 S3_BUCKET_NAME=better-dev-attachments
 S3_REGION=ap-south-1
-S3_ENDPOINT=https://<project-ref>.supabase.co/storage/v1/s3
+S3_ENDPOINT=https://<project-ref>.storage.supabase.co/storage/v1/s3
 S3_ACCESS_KEY_ID=your-access-key
 S3_SECRET_ACCESS_KEY=your-secret-key
-S3_CDN_URL=https://<project-ref>.supabase.co/storage/v1/object/public/better-dev-attachments
+S3_CDN_URL=https://<project-ref>.storage.supabase.co/storage/v1/object/public/better-dev-attachments
 S3_PUBLIC_READ=false
 S3_FORCE_PATH_STYLE=true
 # Local development (no object storage):
@@ -302,7 +315,7 @@ Docker convenience scripts exist (`npm run docker:up` etc.) for the legacy local
 
 ## Testing
 
-The repository includes a Jest unit test suite (currently 5 suites / 19 tests):
+The repository includes a Jest unit test suite (currently 5 suites / 32 tests):
 
 ```bash
 npm test              # run all unit tests
